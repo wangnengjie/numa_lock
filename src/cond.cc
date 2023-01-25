@@ -1,9 +1,9 @@
 #include "cond.hh"
+#include "common.hh"
 #include "mutex.hh"
 #include <abt.h>
 #include <cassert>
 #include <cstdint>
-#include <emmintrin.h>
 #include <iostream>
 #include <stdexcept>
 
@@ -25,10 +25,7 @@ auto Cond::wait(Mutex *mu, uint32_t numa_id) -> void {
   }
   mu->unlock();
   WaitQ node;
-  if (ABT_SUCCESS != ABT_self_get_thread(&node.ult_handle_) ||
-      node.ult_handle_ == ABT_THREAD_NULL) {
-    throw std::runtime_error("failed to get ULT handle, check runtime");
-  }
+  abt_get_thread(&node.ult_handle_);
   // add to queue
   if (next_ == nullptr) {
     assert(num_waiters_ == 0);
@@ -39,9 +36,7 @@ auto Cond::wait(Mutex *mu, uint32_t numa_id) -> void {
   tail_ = &node;
   num_waiters_++;
   q_mu_.unlock();
-  if (ABT_SUCCESS != ABT_self_suspend()) {
-    throw std::runtime_error("failed to suspend, check runtime");
-  }
+  abt_suspend();
   // resumed
   mu->lock(numa_id);
 }
@@ -65,9 +60,7 @@ auto Cond::signal_one(uint32_t numa_id) -> void {
       tail_ = nullptr;
     }
     num_waiters_--;
-    while (ABT_ERR_THREAD == ABT_thread_resume(node->ult_handle_)) {
-      _mm_pause();
-    }
+    abt_resume(node->ult_handle_);
   }
   q_mu_.unlock();
 }
@@ -86,14 +79,10 @@ auto Cond::signal_all(uint32_t numa_id) -> void {
   while (next_ != nullptr) {
     auto node = next_;
     next_ = node->next_;
-    if (next_ == nullptr) {
-      waiter_mu_ = nullptr;
-      tail_ = nullptr;
-    }
-    num_waiters_--;
-    while (ABT_ERR_THREAD == ABT_thread_resume(node->ult_handle_)) {
-      _mm_pause();
-    }
+    abt_resume(node->ult_handle_);
   }
+  num_waiters_ = 0;
+  waiter_mu_ = nullptr;
+  tail_ = nullptr;
   q_mu_.unlock();
 }

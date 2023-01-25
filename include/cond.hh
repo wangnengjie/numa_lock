@@ -1,12 +1,13 @@
 #pragma once
 
+#include "common.hh"
 #include "mutex.hh"
 #include <abt.h>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 
-class Cond {
+class Cond : private noncopyable, private nonmoveable {
 private:
   struct WaitQ {
     ABT_thread ult_handle_ = ABT_THREAD_NULL;

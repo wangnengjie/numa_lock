@@ -8,12 +8,11 @@
 #include <cstdint>
 #include <stdexcept>
 
-const size_t SPIN_THRESHOLD = 0;
+const size_t SPIN_THRESHOLD = 50;
 const size_t YILED_SPIN_THRESHOLD = 5;
 const size_t NUMA_BATCH_COUNT = 64;
 
 enum class NodeState : uint64_t {
-  INIT,
   SPIN,
   // ULT suspend, need resume
   SUSPEND,
@@ -25,7 +24,7 @@ enum class NodeState : uint64_t {
   LOCKED_WITH_GLOBAL,
 };
 
-class Mutex {
+class Mutex : private noncopyable, private nonmoveable {
 private:
   struct LocalNode;
   struct NumaNode;
@@ -58,29 +57,19 @@ private:
 
 // manual cache line align in lock phase
 struct Mutex::LocalNode {
-  std::atomic<LocalNode *> next_;
+  std::atomic<LocalNode *> next_ = nullptr;
   // this is only used for dummy in nnode
-  std::atomic<LocalNode *> tail_;
-  std::atomic<NodeState> state_;
-  ABT_thread ult_handle_;
-  LocalNode(bool init_ult_handle = true)
-      : next_(nullptr), tail_(nullptr), state_(NodeState::INIT) {
-    if (init_ult_handle && (ABT_SUCCESS != ABT_self_get_thread(&ult_handle_) ||
-                            ult_handle_ == ABT_THREAD_NULL)) {
-      throw std::runtime_error("failed to get ULT handle, check runtime");
-    }
-  }
+  std::atomic<LocalNode *> tail_ = nullptr;
+  std::atomic<NodeState> state_ = NodeState::SPIN;
+  ABT_thread ult_handle_ = ABT_THREAD_NULL;
 };
 
 struct CACHE_LINE_ALIGN Mutex::NumaNode {
   // local access part
   LocalNode l_list_;
-  std::atomic_uint64_t local_batch_count_;
+  std::atomic_uint64_t local_batch_count_ = 0;
   // global access part
-  std::atomic<NumaNode *> CACHE_LINE_ALIGN next_;
-  std::atomic<NodeState> state_;
-  ABT_thread ult_handle_;
-  NumaNode()
-      : l_list_(false), local_batch_count_(0), next_(nullptr),
-        state_(NodeState::INIT), ult_handle_(ABT_THREAD_NULL) {}
+  std::atomic<NumaNode *> CACHE_LINE_ALIGN next_ = nullptr;
+  std::atomic<NodeState> state_ = NodeState::SPIN;
+  ABT_thread ult_handle_ = ABT_THREAD_NULL;
 };

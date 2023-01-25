@@ -1,8 +1,8 @@
 #include "mutex.hh"
+#include "common.hh"
 #include <abt.h>
 #include <atomic>
 #include <cstddef>
-#include <emmintrin.h>
 #include <stdexcept>
 
 Mutex::Mutex() : locked_numa_(nullptr), ntail_(nullptr) {
@@ -64,9 +64,9 @@ auto Mutex::lock(uint32_t numa_id) -> void {
 
 auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
   LocalNode lnode CACHE_LINE_ALIGN; // cache line align
-  lnode.state_.store(NodeState::SPIN, std::memory_order_release);
-  LocalNode *dummy = &nnode->l_list_;
+  abt_get_thread(&lnode.ult_handle_);
 
+  LocalNode *dummy = &nnode->l_list_;
   LocalNode *pre_tail = dummy->tail_.exchange(&lnode);
 
   if (pre_tail == nullptr) {
@@ -75,26 +75,18 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
     pre_tail->next_.store(&lnode, std::memory_order_release);
 
     for (size_t i = 0;
-         lnode.state_.load(std::memory_order_acquire) == NodeState::SPIN;) {
+         lnode.state_.load(std::memory_order_acquire) == NodeState::SPIN; i++) {
       if (i < SPIN_THRESHOLD) {
-        _mm_pause();
-        i++;
+        pause();
       } else if (i < SPIN_THRESHOLD + YILED_SPIN_THRESHOLD) {
-        int ret = ABT_self_yield();
-        if (ret != ABT_SUCCESS) {
-          throw std::runtime_error("failed to yield, check runtime");
-        }
-        i++;
+        abt_yield();
       } else {
         // we need to suspend
-        auto state = NodeState::SPIN;
-        if (lnode.state_.compare_exchange_weak(state, NodeState::SUSPEND,
+        auto tmp = NodeState::SPIN;
+        if (lnode.state_.compare_exchange_weak(tmp, NodeState::SUSPEND,
                                                std::memory_order_seq_cst,
                                                std::memory_order_relaxed)) {
-          int ret = ABT_self_suspend();
-          if (ret != ABT_SUCCESS) {
-            throw std::runtime_error("failed to suspend, check runtime");
-          }
+          abt_suspend();
           // after suspend, we get the lock and will break loop
         }
       }
@@ -102,9 +94,9 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
   }
   // we get local lock
   auto next_lnode = lnode.next_.load(std::memory_order_acquire);
-  dummy->next_.store(next_lnode, std::memory_order_release);
   if (next_lnode == nullptr) {
-    // no next node, try to set tail to dummy which indicate local is locked
+    dummy->next_.store(nullptr, std::memory_order_release);
+    //! no next node, try to set tail to dummy which indicate local is locked
     auto expected = &lnode;
     if (!dummy->tail_.compare_exchange_strong(expected, dummy,
                                               std::memory_order_seq_cst,
@@ -112,11 +104,14 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
       // dummy->tail is not cur_node, other thread append to list
       // wait lnode next to be setted, avoid segment fault
       while (lnode.next_.load(std::memory_order_acquire) == nullptr) {
-        _mm_pause();
+        pause();
       }
       // update nnode->lnext, relaxed order is okay
-      dummy->next_.store(lnode.next_.load(std::memory_order_relaxed));
+      dummy->next_.store(lnode.next_.load(std::memory_order_relaxed),
+                         std::memory_order_release);
     }
+  } else {
+    dummy->next_.store(next_lnode, std::memory_order_release);
   }
   // relax is okay here
   return lnode.state_.load(std::memory_order_relaxed);
@@ -125,7 +120,7 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
 auto Mutex::lock_global(NumaNode *nnode) -> void {
   // we need to add nnode to global list
   // we check runtime in local lock, no need to check again?
-  ABT_self_get_thread(&nnode->ult_handle_);
+  abt_get_thread(&nnode->ult_handle_);
   nnode->local_batch_count_.store(0, std::memory_order_release);
   nnode->next_.store(nullptr, std::memory_order_release);
   nnode->state_.store(NodeState::SPIN, std::memory_order_release);
@@ -141,13 +136,10 @@ auto Mutex::lock_global(NumaNode *nnode) -> void {
   for (size_t i = 0;
        nnode->state_.load(std::memory_order_acquire) == NodeState::SPIN;) {
     if (i < SPIN_THRESHOLD) {
-      _mm_pause();
+      pause();
       i++;
     } else if (i < SPIN_THRESHOLD + YILED_SPIN_THRESHOLD) {
-      int ret = ABT_self_yield();
-      if (ret != ABT_SUCCESS) {
-        throw std::runtime_error("failed to yield, check runtime");
-      }
+      abt_yield();
       i++;
     } else {
       // we need to suspend
@@ -155,10 +147,7 @@ auto Mutex::lock_global(NumaNode *nnode) -> void {
       if (nnode->state_.compare_exchange_weak(state, NodeState::SUSPEND,
                                               std::memory_order_seq_cst,
                                               std::memory_order_relaxed)) {
-        int ret = ABT_self_suspend();
-        if (ret != ABT_SUCCESS) {
-          throw std::runtime_error("failed to suspend, check runtime");
-        }
+        abt_suspend();
         // after suspend, we get the lock and will break loop
       }
     }
@@ -194,9 +183,7 @@ auto Mutex::pass_local_lock(NumaNode *nnode, NodeState state) -> bool {
   case NodeState::SPIN:
     break;
   case NodeState::SUSPEND:
-    while (ABT_ERR_THREAD == ABT_thread_resume(lnode->ult_handle_)) {
-      _mm_pause();
-    }
+    abt_resume(lnode->ult_handle_);
     break;
   default:
     throw std::runtime_error("invalid state");
@@ -216,7 +203,7 @@ auto Mutex::unlock_global(NumaNode *nnode) -> void {
     // some global waiter add to list, wait next update
     do {
       next = nnode->next_.load(std::memory_order_acquire);
-      _mm_pause();
+      pause();
     } while (next == nullptr);
   }
   NodeState pre_state = next->state_.exchange(NodeState::LOCKED);
@@ -224,9 +211,7 @@ auto Mutex::unlock_global(NumaNode *nnode) -> void {
   case NodeState::SPIN:
     break;
   case NodeState::SUSPEND:
-    while (ABT_ERR_THREAD == ABT_thread_resume(next->ult_handle_)) {
-      _mm_pause();
-    }
+    abt_resume(next->ult_handle_);
     break;
   default:
     throw std::runtime_error("invalid state");
@@ -243,7 +228,7 @@ auto Mutex::unlock_local(NumaNode *nnode) -> void {
       return;
     }
     while (nnode->l_list_.next_.load(std::memory_order_acquire) == nullptr) {
-      _mm_pause();
+      pause();
     }
   }
   pass_local_lock(nnode, NodeState::LOCKED);
