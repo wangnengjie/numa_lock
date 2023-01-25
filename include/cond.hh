@@ -5,24 +5,24 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+
 class Cond {
 private:
   struct WaitQ {
-    ABT_thread ult_handle;
-    WaitQ *next;
-    WaitQ() : ult_handle(ABT_THREAD_NULL), next(nullptr) {}
+    ABT_thread ult_handle_ = ABT_THREAD_NULL;
+    WaitQ *next_ = nullptr;
   };
 
 private:
-  Mutex q_mu;
-  WaitQ *next;
-  WaitQ *tail;
-  size_t num_waiters;
-  Mutex *waiter_mu;
+  Mutex q_mu_;
+  WaitQ *next_ = nullptr;
+  WaitQ *tail_ = nullptr;
+  size_t num_waiters_ = 0;
+  Mutex *waiter_mu_ = nullptr;
 
 public:
-  Cond() : next(nullptr), tail(nullptr), num_waiters(0), waiter_mu(nullptr) {}
-  ~Cond() { assert(num_waiters == 0); }
+  Cond() = default;
+  ~Cond() { assert(num_waiters_ == 0); }
 
   auto wait(Mutex *mu) -> void;
   auto wait(Mutex *mu, uint32_t numa_id) -> void;

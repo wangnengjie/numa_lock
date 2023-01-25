@@ -17,28 +17,28 @@ auto Cond::wait(Mutex *mu) -> void {
 }
 
 auto Cond::wait(Mutex *mu, uint32_t numa_id) -> void {
-  q_mu.lock(numa_id);
-  if (waiter_mu == nullptr) {
-    waiter_mu = mu;
-  } else if (waiter_mu != mu) {
+  q_mu_.lock(numa_id);
+  if (waiter_mu_ == nullptr) {
+    waiter_mu_ = mu;
+  } else if (waiter_mu_ != mu) {
     throw std::runtime_error("pass different mutex to cond");
   }
   mu->unlock();
   WaitQ node;
-  if (ABT_SUCCESS != ABT_self_get_thread(&node.ult_handle) ||
-      node.ult_handle == ABT_THREAD_NULL) {
+  if (ABT_SUCCESS != ABT_self_get_thread(&node.ult_handle_) ||
+      node.ult_handle_ == ABT_THREAD_NULL) {
     throw std::runtime_error("failed to get ULT handle, check runtime");
   }
   // add to queue
-  if (next == nullptr) {
-    assert(num_waiters == 0);
-    next = &node;
+  if (next_ == nullptr) {
+    assert(num_waiters_ == 0);
+    next_ = &node;
   } else {
-    tail->next = &node;
+    tail_->next_ = &node;
   }
-  tail = &node;
-  num_waiters++;
-  q_mu.unlock();
+  tail_ = &node;
+  num_waiters_++;
+  q_mu_.unlock();
   if (ABT_SUCCESS != ABT_self_suspend()) {
     throw std::runtime_error("failed to suspend, check runtime");
   }
@@ -56,20 +56,20 @@ auto Cond::signal_one() -> void {
 }
 
 auto Cond::signal_one(uint32_t numa_id) -> void {
-  q_mu.lock(numa_id);
-  if (next != nullptr) {
-    auto node = next;
-    next = node->next;
-    if (next == nullptr) {
-      waiter_mu = nullptr;
-      tail = nullptr;
+  q_mu_.lock(numa_id);
+  if (next_ != nullptr) {
+    auto node = next_;
+    next_ = node->next_;
+    if (next_ == nullptr) {
+      waiter_mu_ = nullptr;
+      tail_ = nullptr;
     }
-    num_waiters--;
-    while (ABT_ERR_THREAD == ABT_thread_resume(node->ult_handle)) {
+    num_waiters_--;
+    while (ABT_ERR_THREAD == ABT_thread_resume(node->ult_handle_)) {
       _mm_pause();
     }
   }
-  q_mu.unlock();
+  q_mu_.unlock();
 }
 
 auto Cond::signal_all() -> void {
@@ -82,18 +82,18 @@ auto Cond::signal_all() -> void {
 }
 
 auto Cond::signal_all(uint32_t numa_id) -> void {
-  q_mu.lock(numa_id);
-  while (next != nullptr) {
-    auto node = next;
-    next = node->next;
-    if (next == nullptr) {
-      waiter_mu = nullptr;
-      tail = nullptr;
+  q_mu_.lock(numa_id);
+  while (next_ != nullptr) {
+    auto node = next_;
+    next_ = node->next_;
+    if (next_ == nullptr) {
+      waiter_mu_ = nullptr;
+      tail_ = nullptr;
     }
-    num_waiters--;
-    while (ABT_ERR_THREAD == ABT_thread_resume(node->ult_handle)) {
+    num_waiters_--;
+    while (ABT_ERR_THREAD == ABT_thread_resume(node->ult_handle_)) {
       _mm_pause();
     }
   }
-  q_mu.unlock();
+  q_mu_.unlock();
 }

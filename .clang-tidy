@@ -1,3 +1,8 @@
 ---
 Checks: 'clang-analyzer-*,concurrency-*,misc-*,modernize-*,performance-*,portability-*,-performance-no-int-to-ptr'
 HeaderFilterRegex: ''
+CheckOptions:
+  - key:             misc-non-private-member-variables-in-classes.IgnoreClassesWithAllMemberVariablesBeingPublic
+    value:           '1'
+...
+

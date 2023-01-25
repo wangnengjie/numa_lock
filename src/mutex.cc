@@ -5,32 +5,32 @@
 #include <emmintrin.h>
 #include <stdexcept>
 
-Mutex::Mutex() : locked_socket(nullptr), stail(nullptr) {
-  for (auto &i : socket_arr) {
+Mutex::Mutex() : locked_numa_(nullptr), ntail_(nullptr) {
+  for (auto &i : numa_arr) {
     i = nullptr;
   }
 }
 
 Mutex::~Mutex() {
-  for (auto &i : socket_arr) {
-    auto snode = i.load(std::memory_order_acquire);
-    if (snode != nullptr) {
-      delete snode;
+  for (auto &i : numa_arr) {
+    auto nnode = i.load(std::memory_order_acquire);
+    if (nnode != nullptr) {
+      delete nnode;
     }
   }
 }
 
-auto Mutex::get_or_alloc_snode(uint32_t numa_id) -> SocketNode * {
-  if ((size_t)numa_id >= MAX_SOCKET_NUM) {
+auto Mutex::get_or_alloc_nnode(uint32_t numa_id) -> NumaNode * {
+  if ((size_t)numa_id >= MAX_NUMA_NUM) {
     throw std::runtime_error("numa id too large");
   }
-  auto &a_ref = socket_arr[numa_id];
+  auto &a_ref = numa_arr[numa_id];
   auto ptr = a_ref.load(std::memory_order_acquire);
   if (ptr != nullptr) {
     return ptr;
   }
   // first time
-  auto new_node = new SocketNode();
+  auto new_node = new NumaNode();
   if (a_ref.compare_exchange_strong(ptr, new_node)) {
     return new_node;
   } else {
@@ -49,11 +49,11 @@ auto Mutex::lock() -> void {
 }
 
 auto Mutex::lock(uint32_t numa_id) -> void {
-  auto snode = get_or_alloc_snode(numa_id);
-  auto state = lock_local(snode);
+  auto nnode = get_or_alloc_nnode(numa_id);
+  auto state = lock_local(nnode);
   switch (state) {
   case NodeState::LOCKED:
-    lock_global(snode);
+    lock_global(nnode);
     break;
   case NodeState::LOCKED_WITH_GLOBAL:
     break;
@@ -62,20 +62,20 @@ auto Mutex::lock(uint32_t numa_id) -> void {
   }
 }
 
-auto Mutex::lock_local(SocketNode *snode) -> NodeState {
+auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
   LocalNode lnode CACHE_LINE_ALIGN; // cache line align
-  lnode.state.store(NodeState::SPIN, std::memory_order_release);
-  LocalNode *dummy = &snode->l_list;
+  lnode.state_.store(NodeState::SPIN, std::memory_order_release);
+  LocalNode *dummy = &nnode->l_list_;
 
-  LocalNode *pre_tail = dummy->tail.exchange(&lnode);
+  LocalNode *pre_tail = dummy->tail_.exchange(&lnode);
 
   if (pre_tail == nullptr) {
-    lnode.state.store(NodeState::LOCKED, std::memory_order_release);
+    lnode.state_.store(NodeState::LOCKED, std::memory_order_release);
   } else if (pre_tail != nullptr) {
-    pre_tail->next.store(&lnode, std::memory_order_release);
+    pre_tail->next_.store(&lnode, std::memory_order_release);
 
     for (size_t i = 0;
-         lnode.state.load(std::memory_order_acquire) == NodeState::SPIN;) {
+         lnode.state_.load(std::memory_order_acquire) == NodeState::SPIN;) {
       if (i < SPIN_THRESHOLD) {
         _mm_pause();
         i++;
@@ -88,9 +88,9 @@ auto Mutex::lock_local(SocketNode *snode) -> NodeState {
       } else {
         // we need to suspend
         auto state = NodeState::SPIN;
-        if (lnode.state.compare_exchange_weak(state, NodeState::SUSPEND,
-                                              std::memory_order_seq_cst,
-                                              std::memory_order_relaxed)) {
+        if (lnode.state_.compare_exchange_weak(state, NodeState::SUSPEND,
+                                               std::memory_order_seq_cst,
+                                               std::memory_order_relaxed)) {
           int ret = ABT_self_suspend();
           if (ret != ABT_SUCCESS) {
             throw std::runtime_error("failed to suspend, check runtime");
@@ -101,45 +101,45 @@ auto Mutex::lock_local(SocketNode *snode) -> NodeState {
     }
   }
   // we get local lock
-  auto next_lnode = lnode.next.load(std::memory_order_acquire);
-  dummy->next.store(next_lnode, std::memory_order_release);
+  auto next_lnode = lnode.next_.load(std::memory_order_acquire);
+  dummy->next_.store(next_lnode, std::memory_order_release);
   if (next_lnode == nullptr) {
     // no next node, try to set tail to dummy which indicate local is locked
     auto expected = &lnode;
-    if (!dummy->tail.compare_exchange_strong(expected, dummy,
-                                             std::memory_order_seq_cst,
-                                             std::memory_order_relaxed)) {
+    if (!dummy->tail_.compare_exchange_strong(expected, dummy,
+                                              std::memory_order_seq_cst,
+                                              std::memory_order_relaxed)) {
       // dummy->tail is not cur_node, other thread append to list
       // wait lnode next to be setted, avoid segment fault
-      while (lnode.next.load(std::memory_order_acquire) == nullptr) {
+      while (lnode.next_.load(std::memory_order_acquire) == nullptr) {
         _mm_pause();
       }
-      // update snode->lnext, relaxed order is okay
-      dummy->next.store(lnode.next.load(std::memory_order_relaxed));
+      // update nnode->lnext, relaxed order is okay
+      dummy->next_.store(lnode.next_.load(std::memory_order_relaxed));
     }
   }
   // relax is okay here
-  return lnode.state.load(std::memory_order_relaxed);
+  return lnode.state_.load(std::memory_order_relaxed);
 }
 
-auto Mutex::lock_global(SocketNode *snode) -> void {
-  // we need to add snode to global list
+auto Mutex::lock_global(NumaNode *nnode) -> void {
+  // we need to add nnode to global list
   // we check runtime in local lock, no need to check again?
-  ABT_self_get_thread(&snode->ult_handle);
-  snode->local_batch_count.store(0, std::memory_order_release);
-  snode->next.store(nullptr, std::memory_order_release);
-  snode->state.store(NodeState::SPIN, std::memory_order_release);
+  ABT_self_get_thread(&nnode->ult_handle_);
+  nnode->local_batch_count_.store(0, std::memory_order_release);
+  nnode->next_.store(nullptr, std::memory_order_release);
+  nnode->state_.store(NodeState::SPIN, std::memory_order_release);
 
-  auto pre_tail = stail.exchange(snode);
+  auto pre_tail = ntail_.exchange(nnode);
   if (pre_tail == nullptr) {
-    snode->state.store(NodeState::LOCKED, std::memory_order_release);
-    locked_socket.store(snode, std::memory_order_release);
+    nnode->state_.store(NodeState::LOCKED, std::memory_order_release);
+    locked_numa_.store(nnode, std::memory_order_release);
     return;
   }
-  pre_tail->next.store(snode, std::memory_order_release);
+  pre_tail->next_.store(nnode, std::memory_order_release);
 
   for (size_t i = 0;
-       snode->state.load(std::memory_order_acquire) == NodeState::SPIN;) {
+       nnode->state_.load(std::memory_order_acquire) == NodeState::SPIN;) {
     if (i < SPIN_THRESHOLD) {
       _mm_pause();
       i++;
@@ -152,9 +152,9 @@ auto Mutex::lock_global(SocketNode *snode) -> void {
     } else {
       // we need to suspend
       auto state = NodeState::SPIN;
-      if (snode->state.compare_exchange_weak(state, NodeState::SUSPEND,
-                                             std::memory_order_seq_cst,
-                                             std::memory_order_relaxed)) {
+      if (nnode->state_.compare_exchange_weak(state, NodeState::SUSPEND,
+                                              std::memory_order_seq_cst,
+                                              std::memory_order_relaxed)) {
         int ret = ABT_self_suspend();
         if (ret != ABT_SUCCESS) {
           throw std::runtime_error("failed to suspend, check runtime");
@@ -164,37 +164,37 @@ auto Mutex::lock_global(SocketNode *snode) -> void {
     }
   }
   // get global lock
-  locked_socket.store(snode, std::memory_order_release);
+  locked_numa_.store(nnode, std::memory_order_release);
   return;
 }
 
 auto Mutex::unlock() -> void {
-  auto snode = locked_socket.load(std::memory_order_acquire);
+  auto nnode = locked_numa_.load(std::memory_order_acquire);
   // caller should protect the mutex is locked
-  auto c = snode->local_batch_count++;
+  auto c = nnode->local_batch_count_++;
   if (c < NUMA_BATCH_COUNT) {
-    if (pass_local_lock(snode, NodeState::LOCKED_WITH_GLOBAL)) {
+    if (pass_local_lock(nnode, NodeState::LOCKED_WITH_GLOBAL)) {
       return;
     }
     // pass false, no local waiter
   }
-  snode->local_batch_count = 0;
-  unlock_global(snode);
-  unlock_local(snode);
+  nnode->local_batch_count_ = 0;
+  unlock_global(nnode);
+  unlock_local(nnode);
   return;
 }
 
-auto Mutex::pass_local_lock(SocketNode *snode, NodeState state) -> bool {
-  LocalNode *lnode = snode->l_list.next.load(std::memory_order_acquire);
+auto Mutex::pass_local_lock(NumaNode *nnode, NodeState state) -> bool {
+  LocalNode *lnode = nnode->l_list_.next_.load(std::memory_order_acquire);
   if (lnode == nullptr) {
     return false;
   }
-  NodeState pre_state = lnode->state.exchange(state);
+  NodeState pre_state = lnode->state_.exchange(state);
   switch (pre_state) {
   case NodeState::SPIN:
     break;
   case NodeState::SUSPEND:
-    while (ABT_ERR_THREAD == ABT_thread_resume(lnode->ult_handle)) {
+    while (ABT_ERR_THREAD == ABT_thread_resume(lnode->ult_handle_)) {
       _mm_pause();
     }
     break;
@@ -205,26 +205,26 @@ auto Mutex::pass_local_lock(SocketNode *snode, NodeState state) -> bool {
   return true;
 }
 
-auto Mutex::unlock_global(SocketNode *snode) -> void {
-  SocketNode *next = snode->next.load(std::memory_order_acquire);
+auto Mutex::unlock_global(NumaNode *nnode) -> void {
+  NumaNode *next = nnode->next_.load(std::memory_order_acquire);
   if (next == nullptr) {
-    auto tmp = snode;
-    if (stail.compare_exchange_strong(tmp, nullptr, std::memory_order_seq_cst,
-                                      std::memory_order_relaxed)) {
+    auto tmp = nnode;
+    if (ntail_.compare_exchange_strong(tmp, nullptr, std::memory_order_seq_cst,
+                                       std::memory_order_relaxed)) {
       return;
     }
     // some global waiter add to list, wait next update
     do {
-      next = snode->next.load(std::memory_order_acquire);
+      next = nnode->next_.load(std::memory_order_acquire);
       _mm_pause();
     } while (next == nullptr);
   }
-  NodeState pre_state = next->state.exchange(NodeState::LOCKED);
+  NodeState pre_state = next->state_.exchange(NodeState::LOCKED);
   switch (pre_state) {
   case NodeState::SPIN:
     break;
   case NodeState::SUSPEND:
-    while (ABT_ERR_THREAD == ABT_thread_resume(next->ult_handle)) {
+    while (ABT_ERR_THREAD == ABT_thread_resume(next->ult_handle_)) {
       _mm_pause();
     }
     break;
@@ -234,17 +234,17 @@ auto Mutex::unlock_global(SocketNode *snode) -> void {
   }
 }
 
-auto Mutex::unlock_local(SocketNode *snode) -> void {
-  if (snode->l_list.next.load(std::memory_order_acquire) == nullptr) {
-    auto tmp = &snode->l_list;
-    if (snode->l_list.tail.compare_exchange_strong(tmp, nullptr,
-                                                   std::memory_order_seq_cst,
-                                                   std::memory_order_relaxed)) {
+auto Mutex::unlock_local(NumaNode *nnode) -> void {
+  if (nnode->l_list_.next_.load(std::memory_order_acquire) == nullptr) {
+    auto tmp = &nnode->l_list_;
+    if (nnode->l_list_.tail_.compare_exchange_strong(
+            tmp, nullptr, std::memory_order_seq_cst,
+            std::memory_order_relaxed)) {
       return;
     }
-    while (snode->l_list.next.load(std::memory_order_acquire) == nullptr) {
+    while (nnode->l_list_.next_.load(std::memory_order_acquire) == nullptr) {
       _mm_pause();
     }
   }
-  pass_local_lock(snode, NodeState::LOCKED);
+  pass_local_lock(nnode, NodeState::LOCKED);
 }
