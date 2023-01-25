@@ -24,7 +24,7 @@ enum class NodeState : uint64_t {
   LOCKED_WITH_GLOBAL,
 };
 
-class Mutex : private noncopyable, private nonmoveable {
+class CACHE_LINE_ALIGN Mutex : private noncopyable, private nonmoveable {
 private:
   struct LocalNode;
   struct NumaNode;
@@ -34,8 +34,8 @@ private:
       CACHE_LINE_SIZE / sizeof(std::atomic<NumaNode *>);
 
 private:
-  std::atomic<NumaNode *> locked_numa_;
-  std::atomic<NumaNode *> ntail_;
+  std::atomic<NumaNode *> locked_numa_{nullptr};
+  std::atomic<NumaNode *> ntail_{nullptr};
   // maybe 8 numa is enough in our case?
   std::array<std::atomic<NumaNode *>, MAX_NUMA_NUM> CACHE_LINE_ALIGN numa_arr;
 
@@ -57,19 +57,19 @@ private:
 
 // manual cache line align in lock phase
 struct Mutex::LocalNode {
-  std::atomic<LocalNode *> next_ = nullptr;
+  std::atomic<LocalNode *> next_{nullptr};
   // this is only used for dummy in nnode
-  std::atomic<LocalNode *> tail_ = nullptr;
-  std::atomic<NodeState> state_ = NodeState::SPIN;
-  ABT_thread ult_handle_ = ABT_THREAD_NULL;
+  std::atomic<LocalNode *> tail_{nullptr};
+  std::atomic<NodeState> state_{NodeState::SPIN};
+  ABT_thread ult_handle_{ABT_THREAD_NULL};
 };
 
 struct CACHE_LINE_ALIGN Mutex::NumaNode {
   // local access part
   LocalNode l_list_;
-  std::atomic_uint64_t local_batch_count_ = 0;
+  std::atomic_uint64_t local_batch_count_{0};
   // global access part
-  std::atomic<NumaNode *> CACHE_LINE_ALIGN next_ = nullptr;
-  std::atomic<NodeState> state_ = NodeState::SPIN;
-  ABT_thread ult_handle_ = ABT_THREAD_NULL;
+  std::atomic<NumaNode *> CACHE_LINE_ALIGN next_{nullptr};
+  std::atomic<NodeState> state_{NodeState::SPIN};
+  ABT_thread ult_handle_{ABT_THREAD_NULL};
 };

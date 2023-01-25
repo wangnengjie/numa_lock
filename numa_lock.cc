@@ -2,11 +2,14 @@
 #include "mutex.hh"
 #include <abt.h>
 #include <cassert>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <numa.h>
 #include <random>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -21,6 +24,9 @@ struct global_thread_arg {
   ABT_cond abt_cond;
   Mutex mu;
   ABT_mutex abt_mu;
+  std::mutex sys_mu;
+  std::condition_variable sys_cv1;
+  std::condition_variable sys_cv2;
   int64_t value = 0;
   std::unordered_map<uint32_t, uint32_t> map;
 };
@@ -55,12 +61,15 @@ auto bench(void *_arg) -> void {
   auto kvs = gen_kv();
   ABT_barrier_wait(arg->b1);
   ABT_barrier_wait(arg->b2);
-  for (auto kv : kvs) {
+  for (auto &kv : kvs) {
+    // arg->sys_mu.lock();
     arg->mu.lock();
     // ABT_mutex_lock(arg->abt_mu);
-    arg->map[kv.first] = kv.second;
+    // arg->map[kv.first] = kv.second;
+    arg->value += kv.first + kv.second;
     // ABT_mutex_unlock(arg->abt_mu);
     arg->mu.unlock();
+    // arg->sys_mu.unlock();
   }
   ABT_barrier_wait(arg->b3);
 }
@@ -78,19 +87,24 @@ auto check_mutex(void *_arg) -> void {
   ABT_barrier_wait(arg->b2);
   for (int64_t i = 0; (uint64_t)i < OP_NUM; i++) {
     arg->mu.lock(numa_id);
+    // std::unique_lock<std::mutex> l(arg->sys_mu);
     //! we have two numa node
     if (numa_id & 1) {
       while (arg->value > 0) {
         arg->cv1.wait(&arg->mu, numa_id);
+        // arg->sys_cv1.wait(l);
       }
       arg->value += i;
       arg->cv2.signal_one(numa_id);
+      // arg->sys_cv2.notify_one();
     } else {
       while (arg->value < 0) {
         arg->cv2.wait(&arg->mu, numa_id);
+        // arg->sys_cv2.wait(l);
       }
       arg->value -= i;
       arg->cv1.signal_one(numa_id);
+      // arg->sys_cv1.notify_one();
     }
     arg->mu.unlock();
   }
@@ -99,7 +113,7 @@ auto check_mutex(void *_arg) -> void {
 
 auto main(int argc, char **argv) -> int {
   // OS thread num
-  int num_xstreams = 16;
+  int num_xstreams = 20;
   // ULT num
   int num_threads = num_xstreams;
   auto *xstreams = (ABT_xstream *)malloc(sizeof(ABT_xstream) * num_xstreams);
@@ -115,14 +129,14 @@ auto main(int argc, char **argv) -> int {
 
   auto max_id = numa_max_node();
   auto num_cpus = numa_num_configured_cpus();
+  assert(num_cpus >= num_xstreams);
   auto cpu_mask = numa_bitmask_alloc(num_cpus);
   for (int i = 0; i <= max_id; i++) {
     numa_bitmask_clearall(cpu_mask);
     numa_node_to_cpus(i, cpu_mask);
-    int numa_num_cpus = numa_bitmask_weight(cpu_mask);
     int id = 0;
     for (int j = i; j < num_xstreams; j += (max_id + 1)) {
-      for (; id < numa_num_cpus; id++) {
+      for (; id < num_cpus; id++) {
         if (numa_bitmask_isbitset(cpu_mask, id)) {
           break;
         }

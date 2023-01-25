@@ -10,16 +10,16 @@
 class Cond : private noncopyable, private nonmoveable {
 private:
   struct WaitQ {
-    ABT_thread ult_handle_ = ABT_THREAD_NULL;
-    WaitQ *next_ = nullptr;
+    ABT_thread ult_handle_{ABT_THREAD_NULL};
+    WaitQ *next_{nullptr};
   };
 
 private:
   Mutex q_mu_;
-  WaitQ *next_ = nullptr;
-  WaitQ *tail_ = nullptr;
-  size_t num_waiters_ = 0;
-  Mutex *waiter_mu_ = nullptr;
+  WaitQ *next_{nullptr};
+  WaitQ *tail_{nullptr};
+  size_t num_waiters_{0};
+  Mutex *waiter_mu_{nullptr};
 
 public:
   Cond() = default;

@@ -7,6 +7,8 @@
 const size_t CACHE_LINE_SIZE = 64;
 
 #define CACHE_LINE_ALIGN __attribute__((aligned(CACHE_LINE_SIZE)))
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 static inline auto pause() -> void {
 #if defined(__i386__) || defined(__x86_64__)
@@ -21,20 +23,20 @@ static inline auto pause() -> void {
 }
 
 static inline auto abt_get_thread(ABT_thread *thread) -> void {
-  if (ABT_SUCCESS != ABT_self_get_thread(thread) ||
-      *thread == ABT_THREAD_NULL) {
+  if (unlikely(ABT_SUCCESS != ABT_self_get_thread(thread) ||
+               *thread == ABT_THREAD_NULL)) {
     throw std::runtime_error("failed to get ULT handle, check runtime");
   }
 }
 
 static inline auto abt_yield() -> void {
-  if (ABT_self_yield() != ABT_SUCCESS) {
+  if (unlikely(ABT_self_yield() != ABT_SUCCESS)) {
     throw std::runtime_error("failed to yield, check runtime");
   }
 }
 
 static inline auto abt_suspend() -> void {
-  if (ABT_self_suspend() != ABT_SUCCESS) {
+  if (unlikely(ABT_self_suspend() != ABT_SUCCESS)) {
     throw std::runtime_error("failed to suspend, check runtime");
   }
 }
@@ -44,7 +46,7 @@ static inline auto abt_resume(ABT_thread thread) -> void {
   while (ABT_ERR_THREAD == (ret = ABT_thread_resume(thread))) {
     pause();
   }
-  if (ret != ABT_SUCCESS) {
+  if (unlikely(ret != ABT_SUCCESS)) {
     throw std::runtime_error("failed to resume, check runtime");
   }
 }
