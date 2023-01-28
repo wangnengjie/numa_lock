@@ -65,8 +65,8 @@ auto bench(void *_arg) -> void {
     // arg->sys_mu.lock();
     arg->mu.lock();
     // ABT_mutex_lock(arg->abt_mu);
-    // arg->map[kv.first] = kv.second;
-    arg->value += kv.first + kv.second;
+    arg->map[kv.first] = kv.second;
+    // arg->value += kv.first + kv.second;
     // ABT_mutex_unlock(arg->abt_mu);
     arg->mu.unlock();
     // arg->sys_mu.unlock();
@@ -113,7 +113,7 @@ auto check_mutex(void *_arg) -> void {
 
 auto main(int argc, char **argv) -> int {
   // OS thread num
-  int num_xstreams = 20;
+  int num_xstreams = 40;
   // ULT num
   int num_threads = num_xstreams;
   auto *xstreams = (ABT_xstream *)malloc(sizeof(ABT_xstream) * num_xstreams);

@@ -1,5 +1,6 @@
 #include "mutex.hh"
 #include "common.hh"
+#include "spinwait.hh"
 #include <abt.h>
 #include <atomic>
 #include <cstddef>
@@ -74,14 +75,9 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
     lnode.state_.store(NodeState::LOCKED, std::memory_order_relaxed);
   } else if (pre_tail != nullptr) {
     pre_tail->next_.store(&lnode, std::memory_order_release);
-
-    for (size_t i = 0;
-         lnode.state_.load(std::memory_order_relaxed) == NodeState::SPIN; i++) {
-      if (i < SPIN_THRESHOLD) {
-        pause();
-      } else if (i < SPIN_THRESHOLD + YILED_SPIN_THRESHOLD) {
-        abt_yield();
-      } else {
+    SpinWait spinwait;
+    while (lnode.state_.load(std::memory_order_relaxed) == NodeState::SPIN) {
+      spinwait.spin(abt_yield, [&lnode]() {
         // we need to suspend
         auto tmp = NodeState::SPIN;
         if (lnode.state_.compare_exchange_weak(tmp, NodeState::SUSPEND,
@@ -90,7 +86,7 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
           abt_suspend();
           // after suspend, we get the lock and will break loop
         }
-      }
+      });
     }
   }
   // we get local lock
@@ -132,16 +128,9 @@ auto Mutex::lock_global(NumaNode *nnode) -> void {
     return;
   }
   pre_tail->next_.store(nnode, std::memory_order_release);
-
-  for (size_t i = 0;
-       nnode->state_.load(std::memory_order_relaxed) == NodeState::SPIN;) {
-    if (i < SPIN_THRESHOLD) {
-      pause();
-      i++;
-    } else if (i < SPIN_THRESHOLD + YILED_SPIN_THRESHOLD) {
-      abt_yield();
-      i++;
-    } else {
+  SpinWait spinwait;
+  while (nnode->state_.load(std::memory_order_relaxed) == NodeState::SPIN) {
+    spinwait.spin(abt_yield, [&nnode]() {
       // we need to suspend
       auto state = NodeState::SPIN;
       if (nnode->state_.compare_exchange_weak(state, NodeState::SUSPEND,
@@ -150,7 +139,7 @@ auto Mutex::lock_global(NumaNode *nnode) -> void {
         abt_suspend();
         // after suspend, we get the lock and will break loop
       }
-    }
+    });
   }
   // get global lock
   locked_numa_.store(nnode, std::memory_order_release);

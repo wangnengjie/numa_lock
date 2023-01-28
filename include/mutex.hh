@@ -8,9 +8,7 @@
 #include <cstdint>
 #include <stdexcept>
 
-const size_t SPIN_THRESHOLD = 50;
-const size_t YILED_SPIN_THRESHOLD = 5;
-const size_t NUMA_BATCH_COUNT = 64;
+const size_t NUMA_BATCH_COUNT = 128;
 
 enum class NodeState : uint64_t {
   SPIN,
