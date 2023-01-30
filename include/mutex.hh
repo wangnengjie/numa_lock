@@ -63,10 +63,8 @@ struct Mutex::LocalNode {
 };
 
 struct CACHE_LINE_ALIGN Mutex::NumaNode {
-  // local access part
   LocalNode l_list_;
   std::atomic_uint64_t local_batch_count_{0};
-  // global access part
   std::atomic<NumaNode *> CACHE_LINE_ALIGN next_{nullptr};
   std::atomic<NodeState> state_{NodeState::SPIN};
   ABT_thread ult_handle_{ABT_THREAD_NULL};

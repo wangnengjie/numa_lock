@@ -10,17 +10,23 @@ const size_t CACHE_LINE_SIZE = 64;
 #define likely(x) __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
-static inline auto pause() -> void {
-#if defined(__i386__) || defined(__x86_64__)
-  asm volatile("pause");
-#elif defined(__aarch64__)
-  asm volatile("isb");
-#elif defined(__powerpc64__)
-  asm volatile("or 27,27,27");
-#elif defined(__loongarch64)
-  asm volatile("dbar 0");
+static inline auto barrier() -> void { asm volatile("" : : : "memory"); }
+
+#if defined(__x86_64__)
+static inline auto rmb() -> void { asm volatile("lfence" : : : "memory"); }
+static inline auto wmb() -> void { asm volatile("sfence" : : : "memory"); }
+static inline auto mb() -> void { asm volatile("mfence" : : : "memory"); }
+static inline auto relax() -> void { asm volatile("pause\n" : : : "memory"); }
+static inline auto pause() -> void { asm volatile("pause"); }
+#elif defined(__arm64__) || defined(__aarch64__)
+static inline auto rmb() -> void { asm volatile("dmb ishld" : : : "memory"); }
+static inline auto wmb() -> void { asm volatile("dmb ishst" : : : "memory"); }
+static inline auto mb() -> void { asm volatile("dmb ish" : : : "memory"); }
+static inline auto relax() -> void { asm volatile("yield" : : : "memory"); }
+static inline auto pause() -> void { asm volatile("isb"); }
+#else
+#error "unsupported arch"
 #endif
-}
 
 static inline auto abt_get_thread(ABT_thread *thread) -> void {
   if (unlikely(ABT_SUCCESS != ABT_self_get_thread(thread) ||

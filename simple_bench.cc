@@ -1,4 +1,5 @@
 #include "mutex.hh"
+#include "spinlock.hh"
 #include <abt.h>
 #include <cstddef>
 #include <cstdint>
@@ -22,10 +23,12 @@ struct Context {
   ABT_barrier b2;
   ABT_barrier b3;
   Mutex mu;
+  Spinlock spin;
   ABT_mutex abt_mu;
   std::mutex sys_mu;
   std::shared_mutex sys_rwlock;
   std::unordered_map<uint32_t, uint32_t> map;
+  uint64_t val;
   std::string target_mutex;
 };
 
@@ -75,6 +78,13 @@ auto bench(void *) -> void {
       gctx.map[req.key] = req.value;
       // gctx.value += kv.first + kv.second;
       gctx.mu.unlock();
+    }
+  } else if (gctx.target_mutex == "Spinlock") {
+    for (auto &req : reqs) {
+      gctx.spin.lock();
+      gctx.map[req.key] = req.value;
+      // gctx.val += req.key + req.value;
+      gctx.spin.unlock();
     }
   } else if (gctx.target_mutex == "ABT_mutex") {
     for (auto &req : reqs) {
