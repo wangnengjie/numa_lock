@@ -14,9 +14,17 @@ incs = include_directories('include')
 
 subdir('src')
 
-exe = executable(
+numa_lock = executable(
   'numa_lock',
   sources: ['numa_lock.cc', srcs],
+  include_directories: incs,
+  dependencies: [abt_dep, numa_dep],
+  cpp_args: '-faligned-new',
+)
+
+simple_bench = executable(
+  'simple_bench',
+  sources: ['simple_bench.cc', srcs],
   include_directories: incs,
   dependencies: [abt_dep, numa_dep],
   cpp_args: '-faligned-new',
