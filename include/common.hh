@@ -16,14 +16,16 @@ static inline auto barrier() -> void { asm volatile("" : : : "memory"); }
 static inline auto rmb() -> void { asm volatile("lfence" : : : "memory"); }
 static inline auto wmb() -> void { asm volatile("sfence" : : : "memory"); }
 static inline auto mb() -> void { asm volatile("mfence" : : : "memory"); }
-static inline auto relax() -> void { asm volatile("pause\n" : : : "memory"); }
-static inline auto pause() -> void { asm volatile("pause"); }
+static inline auto cpu_relax() -> void {
+  asm volatile("pause\n" : : : "memory");
+}
+static inline auto cpu_pause() -> void { asm volatile("pause"); }
 #elif defined(__arm64__) || defined(__aarch64__)
 static inline auto rmb() -> void { asm volatile("dmb ishld" : : : "memory"); }
 static inline auto wmb() -> void { asm volatile("dmb ishst" : : : "memory"); }
 static inline auto mb() -> void { asm volatile("dmb ish" : : : "memory"); }
-static inline auto relax() -> void { asm volatile("yield" : : : "memory"); }
-static inline auto pause() -> void { asm volatile("isb"); }
+static inline auto cpu_relax() -> void { asm volatile("yield" : : : "memory"); }
+static inline auto cpu_pause() -> void { asm volatile("isb"); }
 #else
 #error "unsupported arch"
 #endif
@@ -50,7 +52,7 @@ static inline auto abt_suspend() -> void {
 static inline auto abt_resume(ABT_thread thread) -> void {
   int ret = 0;
   while (ABT_ERR_THREAD == (ret = ABT_thread_resume(thread))) {
-    pause();
+    cpu_pause();
   }
   if (unlikely(ret != ABT_SUCCESS)) {
     throw std::runtime_error("failed to resume, check runtime");

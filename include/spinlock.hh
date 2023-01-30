@@ -13,6 +13,10 @@ private:
       std::atomic<Node *> tail_;
       std::atomic_bool state_;
     };
+    Node() {
+      next_.store(nullptr, std::memory_order_relaxed);
+      tail_.store(nullptr, std::memory_order_relaxed);
+    };
   };
 
 private:
@@ -36,7 +40,7 @@ inline auto Spinlock::lock() -> void {
   if (pre_tail != nullptr) {
     pre_tail->next_.store(&node, std::memory_order_release);
     while (!node.state_.load(std::memory_order_acquire)) {
-      pause();
+      cpu_pause();
     }
   }
   auto next = node.next_.load(std::memory_order_acquire);
@@ -47,7 +51,7 @@ inline auto Spinlock::lock() -> void {
                                               std::memory_order_acq_rel,
                                               std::memory_order_relaxed)) {
       while (nullptr == (next = node.next_.load(std::memory_order_acquire))) {
-        pause();
+        cpu_pause();
       }
       dummy_.next_.store(next, std::memory_order_release);
     }
@@ -66,7 +70,7 @@ inline auto Spinlock::unlock() -> void {
       return;
     }
     while (nullptr == (next = dummy_.next_.load(std::memory_order_acquire))) {
-      pause();
+      cpu_pause();
     }
   }
   next->state_.store(true, std::memory_order_release);

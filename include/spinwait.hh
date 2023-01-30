@@ -22,7 +22,7 @@ public:
   auto spin(const std::function<void(void)> &yield,
             const std::function<void(void)> &block) -> void {
     if (counter_ < spin_threshold_) {
-      pause();
+      cpu_pause();
     } else if (counter_ < (spin_threshold_ + yield_threshold_)) {
       yield();
     } else {

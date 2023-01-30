@@ -101,7 +101,7 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
       // dummy->tail is not cur_node, other thread append to list
       // wait lnode next to be setted, avoid segment fault
       while (lnode.next_.load(std::memory_order_acquire) == nullptr) {
-        pause();
+        cpu_pause();
       }
       // update nnode->lnext, relaxed order is okay
       dummy->next_.store(lnode.next_.load(std::memory_order_relaxed),
@@ -193,7 +193,7 @@ auto Mutex::unlock_global(NumaNode *nnode) -> void {
     // some global waiter add to list, wait next update
     do {
       next = nnode->next_.load(std::memory_order_acquire);
-      pause();
+      cpu_pause();
     } while (next == nullptr);
   }
   NodeState pre_state =
@@ -219,7 +219,7 @@ auto Mutex::unlock_local(NumaNode *nnode) -> void {
       return;
     }
     while (nnode->l_list_.next_.load(std::memory_order_acquire) == nullptr) {
-      pause();
+      cpu_pause();
     }
   }
   pass_local_lock(nnode, NodeState::LOCKED);
