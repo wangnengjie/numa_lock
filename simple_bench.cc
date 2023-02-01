@@ -23,7 +23,9 @@ struct Context {
   ABT_barrier b2;
   ABT_barrier b3;
   Mutex mu;
-  Spinlock spin;
+  HTicketLock htspin;
+  K42Lock k42;
+  TTASLock ttas;
   ABT_mutex abt_mu;
   std::mutex sys_mu;
   std::shared_mutex sys_rwlock;
@@ -79,12 +81,26 @@ auto bench(void *) -> void {
       // gctx.value += kv.first + kv.second;
       gctx.mu.unlock();
     }
-  } else if (gctx.target_mutex == "Spinlock") {
+  } else if (gctx.target_mutex == "K42Lock") {
     for (auto &req : reqs) {
-      gctx.spin.lock();
+      gctx.k42.lock();
       gctx.map[req.key] = req.value;
       // gctx.val += req.key + req.value;
-      gctx.spin.unlock();
+      gctx.k42.unlock();
+    }
+  } else if (gctx.target_mutex == "HTicketLock") {
+    for (auto &req : reqs) {
+      gctx.htspin.lock(numa_id);
+      gctx.map[req.key] = req.value;
+      // gctx.val += req.key + req.value;
+      gctx.htspin.unlock();
+    }
+  } else if (gctx.target_mutex == "TTASLock") {
+    for (auto &req : reqs) {
+      gctx.ttas.lock();
+      gctx.map[req.key] = req.value;
+      // gctx.val += req.key + req.value;
+      gctx.ttas.unlock();
     }
   } else if (gctx.target_mutex == "ABT_mutex") {
     for (auto &req : reqs) {

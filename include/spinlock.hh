@@ -1,11 +1,15 @@
 #pragma once
 
 #include "common.hh"
+#include "mutex.hh"
+#include <abt.h>
 #include <array>
 #include <atomic>
+#include <cstdint>
+#include <limits>
 
 // this is not a numa aware spinlock
-class Spinlock : private noncopyable, private nonmoveable {
+class K42Lock : private noncopyable, private nonmoveable {
 private:
   struct Node {
     std::atomic<Node *> next_{nullptr};
@@ -23,64 +27,69 @@ private:
   Node dummy_;
 
 public:
-  Spinlock() { dummy_.tail_.store(nullptr, std::memory_order_relaxed); }
+  K42Lock() { dummy_.tail_.store(nullptr, std::memory_order_relaxed); }
   auto lock() -> void;
   auto unlock() -> void;
   auto try_lock() -> bool;
 };
 
-inline auto Spinlock::lock() -> void {
-  if (try_lock()) {
-    return;
-  }
-  Node node CACHE_LINE_ALIGN;
-  node.state_.store(false, std::memory_order_relaxed);
+// hierarchical ticket lock based spinlock
+class HTicketLock : private noncopyable, private nonmoveable {
+private:
+  struct Node {
+    std::atomic_uint64_t next_ticket_{0};
+    std::atomic_uint64_t next_serving_{0};
+    uint64_t g_ticket_{std::numeric_limits<uint64_t>::max()};
+    std::atomic_uint64_t batch_{0};
+    uint32_t numa_id_;
+    Node(uint32_t numa_id) : numa_id_(numa_id) {}
+  } CACHE_LINE_ALIGN;
 
-  auto pre_tail = dummy_.tail_.exchange(&node, std::memory_order_acq_rel);
-  if (pre_tail != nullptr) {
-    pre_tail->next_.store(&node, std::memory_order_release);
-    while (!node.state_.load(std::memory_order_acquire)) {
-      cpu_pause();
+private:
+  static const size_t MAX_NUMA_NUM =
+      CACHE_LINE_SIZE / sizeof(std::atomic<Node *>);
+  static const uint64_t L_BIT = 0b001;
+  static const uint64_t G_BIT = 0b010;
+
+private:
+  std::atomic_uint64_t g_next_ticket_{0};
+  std::atomic_uint64_t g_next_serving_{0};
+  std::atomic<Node *> locked_numa_{nullptr};
+  std::array<std::atomic<Node *>, MAX_NUMA_NUM> CACHE_LINE_ALIGN numa_arr_;
+
+public:
+  HTicketLock();
+  ~HTicketLock();
+  auto lock() -> void {
+    uint32_t cpu_id, numa_id;
+    int ret = getcpu(&cpu_id, &numa_id);
+    if (ret != 0) {
+      throw std::runtime_error("failed to get numa id");
     }
+    lock(numa_id);
   }
-  auto next = node.next_.load(std::memory_order_acquire);
-  if (next == nullptr) {
-    dummy_.next_.store(nullptr, std::memory_order_release);
-    Node *tmp = &node;
-    if (!dummy_.tail_.compare_exchange_strong(tmp, &dummy_,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_relaxed)) {
-      while (nullptr == (next = node.next_.load(std::memory_order_acquire))) {
+  auto lock(uint32_t numa_id) -> void;
+  auto unlock() -> void;
+  auto get_or_alloc_nnode(uint32_t numa_id) -> Node *;
+};
+
+// classic TTAS lock
+class TTASLock : private noncopyable, private nonmoveable {
+private:
+  std::atomic_flag state_{false};
+
+public:
+  auto lock() -> void {
+    while (state_.test_and_set(std::memory_order_acquire)) {
+      while (state_.test(std::memory_order_relaxed)) {
         cpu_pause();
       }
-      dummy_.next_.store(next, std::memory_order_release);
     }
-  } else {
-    dummy_.next_.store(next, std::memory_order_release);
   }
-}
 
-inline auto Spinlock::unlock() -> void {
-  auto next = dummy_.next_.load(std::memory_order_acquire);
-  if (next == nullptr) {
-    auto tmp = &dummy_;
-    if (dummy_.tail_.compare_exchange_strong(tmp, nullptr,
-                                             std::memory_order_acq_rel,
-                                             std::memory_order_relaxed)) {
-      return;
-    }
-    while (nullptr == (next = dummy_.next_.load(std::memory_order_acquire))) {
-      cpu_pause();
-    }
-  }
-  next->state_.store(true, std::memory_order_release);
-}
+  auto unlock() -> void { state_.clear(std::memory_order_release); }
 
-inline auto Spinlock::try_lock() -> bool {
-  Node *tmp = nullptr;
-  if (dummy_.tail_.compare_exchange_strong(
-          tmp, &dummy_, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-    return true;
+  auto try_lock() -> bool {
+    return !state_.test_and_set(std::memory_order_acquire);
   }
-  return false;
-}
+};

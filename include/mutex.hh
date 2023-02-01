@@ -24,8 +24,21 @@ enum class NodeState : uint64_t {
 
 class CACHE_LINE_ALIGN Mutex : private noncopyable, private nonmoveable {
 private:
-  struct LocalNode;
-  struct NumaNode;
+  // manual cache line align in lock phase
+  struct LocalNode {
+    std::atomic<LocalNode *> next_{nullptr};
+    // this is only used for dummy in nnode
+    std::atomic<LocalNode *> tail_{nullptr};
+    std::atomic<NodeState> state_{NodeState::SPIN};
+    ABT_thread ult_handle_{ABT_THREAD_NULL};
+  };
+  struct CACHE_LINE_ALIGN NumaNode {
+    LocalNode l_list_;
+    std::atomic_uint64_t local_batch_count_{0};
+    std::atomic<NumaNode *> CACHE_LINE_ALIGN next_{nullptr};
+    std::atomic<NodeState> state_{NodeState::SPIN};
+    ABT_thread ult_handle_{ABT_THREAD_NULL};
+  };
 
 private:
   static const size_t MAX_NUMA_NUM =
@@ -35,7 +48,7 @@ private:
   std::atomic<NumaNode *> locked_numa_{nullptr};
   std::atomic<NumaNode *> ntail_{nullptr};
   // maybe 8 numa is enough in our case?
-  std::array<std::atomic<NumaNode *>, MAX_NUMA_NUM> CACHE_LINE_ALIGN numa_arr;
+  std::array<std::atomic<NumaNode *>, MAX_NUMA_NUM> CACHE_LINE_ALIGN numa_arr_;
 
 public:
   Mutex();
@@ -51,21 +64,4 @@ private:
   auto unlock_local(NumaNode *nnode) -> void;
   auto unlock_global(NumaNode *nnode) -> void;
   auto pass_local_lock(NumaNode *nnode, NodeState state) -> bool;
-};
-
-// manual cache line align in lock phase
-struct Mutex::LocalNode {
-  std::atomic<LocalNode *> next_{nullptr};
-  // this is only used for dummy in nnode
-  std::atomic<LocalNode *> tail_{nullptr};
-  std::atomic<NodeState> state_{NodeState::SPIN};
-  ABT_thread ult_handle_{ABT_THREAD_NULL};
-};
-
-struct CACHE_LINE_ALIGN Mutex::NumaNode {
-  LocalNode l_list_;
-  std::atomic_uint64_t local_batch_count_{0};
-  std::atomic<NumaNode *> CACHE_LINE_ALIGN next_{nullptr};
-  std::atomic<NodeState> state_{NodeState::SPIN};
-  ABT_thread ult_handle_{ABT_THREAD_NULL};
 };

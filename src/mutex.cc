@@ -7,13 +7,13 @@
 #include <stdexcept>
 
 Mutex::Mutex() {
-  for (auto &i : numa_arr) {
-    i = nullptr;
+  for (auto &i : numa_arr_) {
+    i.store(nullptr, std::memory_order_relaxed);
   }
 }
 
 Mutex::~Mutex() {
-  for (auto &i : numa_arr) {
+  for (auto &i : numa_arr_) {
     auto nnode = i.load(std::memory_order_relaxed);
     if (nnode != nullptr) {
       delete nnode;
@@ -25,7 +25,7 @@ auto Mutex::get_or_alloc_nnode(uint32_t numa_id) -> NumaNode * {
   if ((size_t)numa_id >= MAX_NUMA_NUM) {
     throw std::runtime_error("numa id too large");
   }
-  auto &a_ref = numa_arr[numa_id];
+  auto &a_ref = numa_arr_[numa_id];
   auto ptr = a_ref.load(std::memory_order_relaxed);
   if (likely(ptr != nullptr)) {
     return ptr;
