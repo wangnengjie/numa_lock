@@ -60,15 +60,7 @@ private:
 public:
   HTicketLock();
   ~HTicketLock();
-  auto lock() -> void {
-    uint32_t cpu_id, numa_id;
-    int ret = getcpu(&cpu_id, &numa_id);
-    if (ret != 0) {
-      throw std::runtime_error("failed to get numa id");
-    }
-    lock(numa_id);
-  }
-  auto lock(uint32_t numa_id) -> void;
+  auto lock(uint32_t numa_id = self_numa_id()) -> void;
   auto unlock() -> void;
   auto get_or_alloc_nnode(uint32_t numa_id) -> Node *;
 };

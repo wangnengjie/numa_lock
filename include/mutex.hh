@@ -24,6 +24,7 @@ enum class NodeState : uint64_t {
 
 class CACHE_LINE_ALIGN Mutex : private noncopyable, private nonmoveable {
 private:
+  friend class RWLock;
   // manual cache line align in lock phase
   struct LocalNode {
     std::atomic<LocalNode *> next_{nullptr};
@@ -35,6 +36,7 @@ private:
   struct CACHE_LINE_ALIGN NumaNode {
     LocalNode l_list_;
     std::atomic_uint64_t local_batch_count_{0};
+    std::atomic_uint64_t reader_count_{0}; // for RWLock
     std::atomic<NumaNode *> CACHE_LINE_ALIGN next_{nullptr};
     std::atomic<NodeState> state_{NodeState::SPIN};
     ABT_thread ult_handle_{ABT_THREAD_NULL};
@@ -53,8 +55,7 @@ private:
 public:
   Mutex();
   ~Mutex();
-  auto lock() -> void;
-  auto lock(uint32_t numa_id) -> void;
+  auto lock(uint32_t numa_id = self_numa_id()) -> void;
   auto unlock() -> void;
 
 private:

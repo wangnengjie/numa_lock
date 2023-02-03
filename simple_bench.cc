@@ -1,4 +1,5 @@
 #include "mutex.hh"
+#include "rwlock.hh"
 #include "spinlock.hh"
 #include <abt.h>
 #include <cstddef>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <mutex>
+#include <pthread.h>
 #include <random>
 #include <shared_mutex>
 #include <stdexcept>
@@ -13,10 +15,9 @@
 #include <unordered_map>
 #include <vector>
 
-const double read_p = 0.99;
-
 struct Context {
   uint64_t op_num;
+  double read_p;
   uint32_t thread_num;
   std::vector<uint32_t> start_cores;
   ABT_barrier b1;
@@ -27,8 +28,10 @@ struct Context {
   K42Lock k42;
   TTASLock ttas;
   ABT_mutex abt_mu;
-  std::mutex sys_mu;
-  std::shared_mutex sys_rwlock;
+  pthread_mutex_t sys_mu = PTHREAD_MUTEX_INITIALIZER;
+  RWLock rwlock;
+  ABT_rwlock abt_rwlock;
+  pthread_rwlock_t sys_rwlock = PTHREAD_RWLOCK_INITIALIZER;
   std::unordered_map<uint32_t, uint32_t> map;
   uint64_t val;
   std::string target_mutex;
@@ -58,7 +61,7 @@ auto gen_kv(uint64_t op_num) -> std::vector<Request> {
   for (size_t i = 0; i < op_num; i++) {
     reqs.push_back(Request{
         dis(gen), dis(gen),
-        type_dis(gen) > (std::numeric_limits<uint32_t>::max() * read_p)});
+        type_dis(gen) > (std::numeric_limits<uint32_t>::max() * gctx.read_p)});
   }
   return reqs;
 }
@@ -109,25 +112,63 @@ auto bench(void *) -> void {
       // gctx.value += kv.first + kv.second;
       ABT_mutex_unlock(gctx.abt_mu);
     }
-  } else if (gctx.target_mutex == "std::mutex") {
+  } else if (gctx.target_mutex == "pthread_mutex") {
     for (auto &req : reqs) {
-      gctx.sys_mu.lock();
+      // gctx.sys_mu.lock();
+      pthread_mutex_lock(&gctx.sys_mu);
       gctx.map[req.key] = req.value;
       // gctx.value += kv.first + kv.second;
-      gctx.sys_mu.unlock();
+      pthread_mutex_unlock(&gctx.sys_mu);
     }
-  } else if (gctx.target_mutex == "std::shared_mutex") {
+  } else if (gctx.target_mutex == "RWLock") {
+    int rc = 0; // prevent compiler optimize read request
     for (auto &req : reqs) {
       if (req.write) {
-        gctx.sys_rwlock.lock();
-        gctx.map[req.key] = req.value;
+        gctx.rwlock.wrlock();
+        gctx.map[req.key] = req.value + rc;
         // gctx.value += kv.first + kv.second;
-        gctx.sys_rwlock.unlock();
+        gctx.rwlock.wrunlock();
       } else {
-        gctx.sys_rwlock.lock_shared();
-        { gctx.map.find(req.key); }
+        gctx.rwlock.rdlock();
+        if (gctx.map.count(req.key)) {
+          rc++; // prevent compiler optimize
+        }
         // gctx.value += kv.first + kv.second;
-        gctx.sys_rwlock.unlock_shared();
+        gctx.rwlock.rdunlock();
+      }
+    }
+  } else if (gctx.target_mutex == "pthread_rwlock") {
+    int rc = 0; // prevent compiler optimize read request
+    for (auto &req : reqs) {
+      if (req.write) {
+        pthread_rwlock_wrlock(&gctx.sys_rwlock);
+        gctx.map[req.key] = req.value + rc; // use rc
+        // gctx.value += kv.first + kv.second;
+        pthread_rwlock_unlock(&gctx.sys_rwlock);
+      } else {
+        pthread_rwlock_rdlock(&gctx.sys_rwlock);
+        if (gctx.map.count(req.key)) {
+          rc++; // prevent compiler optimize
+        }
+        // gctx.value += kv.first + kv.second;
+        pthread_rwlock_unlock(&gctx.sys_rwlock);
+      }
+    }
+  } else if (gctx.target_mutex == "ABT_rwlock") {
+    int rc = 0; // prevent compiler optimize read request
+    for (auto &req : reqs) {
+      if (req.write) {
+        ABT_rwlock_wrlock(gctx.abt_rwlock);
+        gctx.map[req.key] = req.value + rc; // use rc
+        // gctx.value += kv.first + kv.second;
+        ABT_rwlock_unlock(gctx.abt_rwlock);
+      } else {
+        ABT_rwlock_rdlock(gctx.abt_rwlock);
+        if (gctx.map.count(req.key)) {
+          rc++; // prevent compiler optimize
+        }
+        // gctx.value += kv.first + kv.second;
+        ABT_rwlock_unlock(gctx.abt_rwlock);
       }
     }
   }
@@ -137,15 +178,16 @@ auto bench(void *) -> void {
 
 auto main(int argc, char **argv) -> int {
   if (argc < 2) {
-    std::cout
-        << "simple_bench <mutex_name> <op_num> <thread_num (per start_core)> "
-           "<start_core> [start_core ...]"
-        << std::endl;
+    std::cout << "simple_bench <mutex_name> <op_num> <read percent> "
+                 "<thread_num (per start_core)> "
+                 "<start_core> [start_core ...]"
+              << std::endl;
   }
   gctx.target_mutex = argv[1];
   gctx.op_num = std::stoull(argv[2]);
-  gctx.thread_num = std::stoul(argv[3]);
-  for (int i = 4; i < argc; i++) {
+  gctx.read_p = std::stod(argv[3]);
+  gctx.thread_num = std::stoul(argv[4]);
+  for (int i = 5; i < argc; i++) {
     gctx.start_cores.push_back(std::stoul(argv[i]));
   }
 
@@ -173,10 +215,11 @@ auto main(int argc, char **argv) -> int {
   }
 
   ABT_mutex_create(&gctx.abt_mu);
+  ABT_rwlock_create(&gctx.abt_rwlock);
   ABT_barrier_create(num_xstreams + 1, &gctx.b1);
   ABT_barrier_create(num_xstreams + 1, &gctx.b2);
   ABT_barrier_create(num_xstreams + 1, &gctx.b3);
-  gctx.map.reserve(gctx.op_num);
+  gctx.map.reserve(gctx.op_num * 2);
 
   /* Create ULTs. */
   for (int i = 0; i < num_xstreams; i++) {
@@ -220,5 +263,6 @@ auto main(int argc, char **argv) -> int {
   ABT_barrier_free(&gctx.b2);
   ABT_barrier_free(&gctx.b3);
   ABT_mutex_free(&gctx.abt_mu);
+  ABT_rwlock_free(&gctx.abt_rwlock);
   return 0;
 }

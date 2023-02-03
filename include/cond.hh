@@ -25,10 +25,7 @@ public:
   Cond() = default;
   ~Cond() { assert(num_waiters_ == 0); }
 
-  auto wait(Mutex *mu) -> void;
-  auto wait(Mutex *mu, uint32_t numa_id) -> void;
-  auto signal_one() -> void;
-  auto signal_one(uint32_t numa_id) -> void;
-  auto signal_all() -> void;
-  auto signal_all(uint32_t numa_id) -> void;
+  auto wait(Mutex *mu, uint32_t numa_id = self_numa_id()) -> void;
+  auto signal_one(uint32_t numa_id = self_numa_id()) -> void;
+  auto signal_all(uint32_t numa_id = self_numa_id()) -> void;
 };

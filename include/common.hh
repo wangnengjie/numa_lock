@@ -2,6 +2,7 @@
 
 #include <abt.h>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 
 const size_t CACHE_LINE_SIZE = 64;
@@ -57,6 +58,15 @@ static inline auto abt_resume(ABT_thread thread) -> void {
   if (unlikely(ret != ABT_SUCCESS)) {
     throw std::runtime_error("failed to resume, check runtime");
   }
+}
+
+static inline auto self_numa_id() -> uint32_t {
+  uint32_t cpu_id, numa_id;
+  int ret = getcpu(&cpu_id, &numa_id);
+  if (unlikely(ret != 0)) {
+    throw std::runtime_error("failed to get numa id");
+  }
+  return numa_id;
 }
 
 class noncopyable {

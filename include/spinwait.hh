@@ -30,4 +30,6 @@ public:
     }
     counter_++;
   }
+
+  auto reset() -> void { counter_ = 0; }
 };

@@ -40,15 +40,6 @@ auto Mutex::get_or_alloc_nnode(uint32_t numa_id) -> NumaNode * {
   }
 }
 
-auto Mutex::lock() -> void {
-  uint32_t cpu_id, numa_id;
-  int ret = getcpu(&cpu_id, &numa_id);
-  if (ret != 0) {
-    throw std::runtime_error("failed to get numa id");
-  }
-  lock(numa_id);
-}
-
 auto Mutex::lock(uint32_t numa_id) -> void {
   auto nnode = get_or_alloc_nnode(numa_id);
   auto state = lock_local(nnode);
@@ -100,12 +91,11 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
                                               std::memory_order_relaxed)) {
       // dummy->tail is not cur_node, other thread append to list
       // wait lnode next to be setted, avoid segment fault
-      while (lnode.next_.load(std::memory_order_acquire) == nullptr) {
+      while (nullptr ==
+             (next_lnode = lnode.next_.load(std::memory_order_acquire))) {
         cpu_pause();
       }
-      // update nnode->lnext, relaxed order is okay
-      dummy->next_.store(lnode.next_.load(std::memory_order_relaxed),
-                         std::memory_order_release);
+      dummy->next_.store(next_lnode, std::memory_order_release);
     }
   } else {
     dummy->next_.store(next_lnode, std::memory_order_release);
@@ -191,10 +181,9 @@ auto Mutex::unlock_global(NumaNode *nnode) -> void {
       return;
     }
     // some global waiter add to list, wait next update
-    do {
-      next = nnode->next_.load(std::memory_order_acquire);
+    while (nullptr == (next = nnode->next_.load(std::memory_order_acquire))) {
       cpu_pause();
-    } while (next == nullptr);
+    }
   }
   NodeState pre_state =
       next->state_.exchange(NodeState::LOCKED, std::memory_order_acq_rel);
