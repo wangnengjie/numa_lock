@@ -7,7 +7,7 @@
 
 class SpinWait {
 private:
-  static const uint32_t SPIN_THRESHOLD = 1024;
+  static const uint32_t SPIN_THRESHOLD = 128;
   static const uint32_t YILED_THRESHOLD = 8;
 
 private:
@@ -27,6 +27,15 @@ public:
       yield();
     } else {
       block();
+    }
+    counter_++;
+  }
+
+  auto spin_no_block(const std::function<void(void)> &yield) -> void {
+    if (counter_ < spin_threshold_) {
+      cpu_pause();
+    } else {
+      yield();
     }
     counter_++;
   }

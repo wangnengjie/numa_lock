@@ -5,15 +5,10 @@
 #include <cstdint>
 #include <stdexcept>
 
-const size_t CACHE_LINE_SIZE = 64;
-
-#define CACHE_LINE_ALIGN __attribute__((aligned(CACHE_LINE_SIZE)))
-#define likely(x) __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-
 static inline auto barrier() -> void { asm volatile("" : : : "memory"); }
 
 #if defined(__x86_64__)
+const size_t CACHE_LINE_SIZE = 128;
 static inline auto rmb() -> void { asm volatile("lfence" : : : "memory"); }
 static inline auto wmb() -> void { asm volatile("sfence" : : : "memory"); }
 static inline auto mb() -> void { asm volatile("mfence" : : : "memory"); }
@@ -22,6 +17,7 @@ static inline auto cpu_relax() -> void {
 }
 static inline auto cpu_pause() -> void { asm volatile("pause"); }
 #elif defined(__arm64__) || defined(__aarch64__)
+const size_t CACHE_LINE_SIZE = 128;
 static inline auto rmb() -> void { asm volatile("dmb ishld" : : : "memory"); }
 static inline auto wmb() -> void { asm volatile("dmb ishst" : : : "memory"); }
 static inline auto mb() -> void { asm volatile("dmb ish" : : : "memory"); }
@@ -30,6 +26,10 @@ static inline auto cpu_pause() -> void { asm volatile("isb"); }
 #else
 #error "unsupported arch"
 #endif
+
+#define CACHE_LINE_ALIGN __attribute__((aligned(CACHE_LINE_SIZE)))
+#define likely(x) __builtin_expect(!!(x), 1)
+#define unlikely(x) __builtin_expect(!!(x), 0)
 
 static inline auto abt_get_thread(ABT_thread *thread) -> void {
   if (unlikely(ABT_SUCCESS != ABT_self_get_thread(thread) ||

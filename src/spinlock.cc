@@ -1,10 +1,7 @@
 #include "spinlock.hh"
 
 auto K42Lock::lock() -> void {
-  if (try_lock()) {
-    return;
-  }
-  Node node CACHE_LINE_ALIGN;
+  Node node;
   node.state_.store(false, std::memory_order_relaxed);
 
   auto pre_tail = dummy_.tail_.exchange(&node, std::memory_order_acq_rel);

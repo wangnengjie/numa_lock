@@ -1,4 +1,5 @@
 #include "mutex.hh"
+#include "mutex_exp.hh"
 #include "rwlock.hh"
 #include "spinlock.hh"
 #include <abt.h>
@@ -15,6 +16,8 @@
 #include <unordered_map>
 #include <vector>
 
+const size_t ULT_PER_STREAM = 5;
+
 struct Context {
   uint64_t op_num;
   double read_p;
@@ -24,6 +27,7 @@ struct Context {
   ABT_barrier b2;
   ABT_barrier b3;
   Mutex mu;
+  experimental::Mutex mu_exp;
   HTicketLock htspin;
   K42Lock k42;
   TTASLock ttas;
@@ -74,7 +78,7 @@ auto bench(void *) -> void {
   //   std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id <<
   //   std::endl; gctx.sys_mu.unlock();
   // }
-  auto reqs = gen_kv(gctx.op_num);
+  auto reqs = gen_kv(gctx.op_num / ULT_PER_STREAM);
   ABT_barrier_wait(gctx.b1);
   ABT_barrier_wait(gctx.b2);
   if (gctx.target_mutex == "Mutex") {
@@ -84,6 +88,15 @@ auto bench(void *) -> void {
       // gctx.value += kv.first + kv.second;
       gctx.mu.unlock();
     }
+  } else if (gctx.target_mutex == "Mutex_EXP") {
+    auto my = new experimental::Mutex::QNode();
+    for (auto &req : reqs) {
+      gctx.mu_exp.lock(my, numa_id);
+      gctx.map[req.key] = req.value;
+      // gctx.val += req.key + req.value;
+      gctx.mu_exp.unlock(&my);
+    }
+    delete my;
   } else if (gctx.target_mutex == "K42Lock") {
     for (auto &req : reqs) {
       gctx.k42.lock();
@@ -192,10 +205,11 @@ auto main(int argc, char **argv) -> int {
   }
 
   int num_xstreams = gctx.thread_num * gctx.start_cores.size();
+  int num_ults = num_xstreams * ULT_PER_STREAM;
 
   auto *xstreams = (ABT_xstream *)malloc(sizeof(ABT_xstream) * num_xstreams);
   auto *pools = (ABT_pool *)malloc(sizeof(ABT_pool) * num_xstreams);
-  auto *threads = (ABT_thread *)malloc(sizeof(ABT_thread) * num_xstreams);
+  auto *threads = (ABT_thread *)malloc(sizeof(ABT_thread) * num_ults);
 
   ABT_init(argc, argv);
   ABT_xstream_self(&xstreams[0]);
@@ -216,15 +230,17 @@ auto main(int argc, char **argv) -> int {
 
   ABT_mutex_create(&gctx.abt_mu);
   ABT_rwlock_create(&gctx.abt_rwlock);
-  ABT_barrier_create(num_xstreams + 1, &gctx.b1);
-  ABT_barrier_create(num_xstreams + 1, &gctx.b2);
-  ABT_barrier_create(num_xstreams + 1, &gctx.b3);
+  ABT_barrier_create(num_ults + 1, &gctx.b1);
+  ABT_barrier_create(num_ults + 1, &gctx.b2);
+  ABT_barrier_create(num_ults + 1, &gctx.b3);
   gctx.map.reserve(gctx.op_num * 2);
 
   /* Create ULTs. */
   for (int i = 0; i < num_xstreams; i++) {
-    ABT_thread_create(pools[i], bench, nullptr, ABT_THREAD_ATTR_NULL,
-                      &threads[i]);
+    for (uint j = 0; j < ULT_PER_STREAM; j++) {
+      ABT_thread_create(pools[i], bench, nullptr, ABT_THREAD_ATTR_NULL,
+                        &threads[i * ULT_PER_STREAM + j]);
+    }
   }
 
   uint64_t total_op = num_xstreams * gctx.op_num;
@@ -243,7 +259,7 @@ auto main(int argc, char **argv) -> int {
             << "Mops" << std::endl;
 
   /* Join and free ULTs. */
-  for (int i = 0; i < num_xstreams; i++) {
+  for (uint i = 0; i < num_xstreams * ULT_PER_STREAM; i++) {
     ABT_thread_free(&threads[i]);
   }
 

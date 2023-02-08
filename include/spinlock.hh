@@ -85,3 +85,36 @@ public:
     return !state_.test_and_set(std::memory_order_acquire);
   }
 };
+
+class CLHLock : private noncopyable, private nonmoveable {
+public:
+  struct QNode {
+    friend class CLHLock;
+
+  private:
+    QNode *prev_{nullptr};
+    std::atomic_bool state_{false};
+
+  public:
+    QNode(bool lock = false) : state_(lock) {}
+  };
+
+private:
+  std::atomic<QNode *> tail_{new QNode(true)};
+
+public:
+  CLHLock() = default;
+  ~CLHLock() { delete tail_.load(std::memory_order_relaxed); }
+  auto lock(QNode *my) -> void {
+    my->state_.store(false, std::memory_order_relaxed);
+    my->prev_ = tail_.exchange(my, std::memory_order_acquire);
+    while (!my->prev_->state_.load(std::memory_order_acquire)) {
+      cpu_pause();
+    }
+  }
+  auto unlock(QNode **my) -> void {
+    auto prev = (*my)->prev_;
+    (*my)->state_.store(true, std::memory_order_release);
+    *my = prev;
+  }
+};

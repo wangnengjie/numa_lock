@@ -66,18 +66,15 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
     lnode.state_.store(NodeState::LOCKED, std::memory_order_relaxed);
   } else if (pre_tail != nullptr) {
     pre_tail->next_.store(&lnode, std::memory_order_release);
-    SpinWait spinwait;
     while (lnode.state_.load(std::memory_order_relaxed) == NodeState::SPIN) {
-      spinwait.spin(abt_yield, [&lnode]() {
-        // we need to suspend
-        auto tmp = NodeState::SPIN;
-        if (lnode.state_.compare_exchange_weak(tmp, NodeState::SUSPEND,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_relaxed)) {
-          abt_suspend();
-          // after suspend, we get the lock and will break loop
-        }
-      });
+      // local just suspend
+      auto tmp = NodeState::SPIN;
+      if (lnode.state_.compare_exchange_weak(tmp, NodeState::SUSPEND,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_relaxed)) {
+        abt_suspend();
+        // after suspend, we get the lock and will break loop
+      }
     }
   }
   // we get local lock
