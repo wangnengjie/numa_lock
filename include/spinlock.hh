@@ -137,21 +137,21 @@ private:
 // classic TTAS lock
 class TTASLock : private noncopyable, private nonmoveable {
 private:
-  std::atomic_flag state_{false};
+  std::atomic_bool state_{false};
 
 public:
   auto lock() -> void {
-    while (state_.test_and_set(std::memory_order_acquire)) {
-      while (state_.test(std::memory_order_relaxed)) {
+    while (state_.exchange(true, std::memory_order_acquire)) {
+      while (state_.load(std::memory_order_relaxed)) {
         cpu_pause();
       }
     }
   }
 
-  auto unlock() -> void { state_.clear(std::memory_order_release); }
+  auto unlock() -> void { state_.store(false, std::memory_order_release); }
 
   auto try_lock() -> bool {
-    return !state_.test_and_set(std::memory_order_acquire);
+    return !state_.exchange(true, std::memory_order_acquire);
   }
 };
 
