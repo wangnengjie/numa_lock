@@ -28,7 +28,7 @@ struct Context {
   ABT_barrier b3;
   Mutex mu;
   experimental::Mutex mu_exp;
-  HTicketLock htspin;
+  HTTAS httas;
   K42Lock k42;
   TTASLock ttas;
   ABT_mutex abt_mu;
@@ -84,7 +84,7 @@ auto bench(void *) -> void {
   if (gctx.target_mutex == "Mutex") {
     for (auto &req : reqs) {
       gctx.mu.lock(numa_id);
-      gctx.map[req.key] = req.value;
+      gctx.map.insert_or_assign(req.key, req.value);
       // gctx.value += kv.first + kv.second;
       gctx.mu.unlock();
     }
@@ -92,7 +92,7 @@ auto bench(void *) -> void {
     auto my = new experimental::Mutex::QNode();
     for (auto &req : reqs) {
       gctx.mu_exp.lock(my, numa_id);
-      gctx.map[req.key] = req.value;
+      gctx.map.insert_or_assign(req.key, req.value);
       // gctx.val += req.key + req.value;
       gctx.mu_exp.unlock(&my);
     }
@@ -100,28 +100,28 @@ auto bench(void *) -> void {
   } else if (gctx.target_mutex == "K42Lock") {
     for (auto &req : reqs) {
       gctx.k42.lock();
-      gctx.map[req.key] = req.value;
+      gctx.map.insert_or_assign(req.key, req.value);
       // gctx.val += req.key + req.value;
       gctx.k42.unlock();
-    }
-  } else if (gctx.target_mutex == "HTicketLock") {
-    for (auto &req : reqs) {
-      gctx.htspin.lock(numa_id);
-      gctx.map[req.key] = req.value;
-      // gctx.val += req.key + req.value;
-      gctx.htspin.unlock();
     }
   } else if (gctx.target_mutex == "TTASLock") {
     for (auto &req : reqs) {
       gctx.ttas.lock();
-      gctx.map[req.key] = req.value;
+      gctx.map.insert_or_assign(req.key, req.value);
       // gctx.val += req.key + req.value;
       gctx.ttas.unlock();
+    }
+  } else if (gctx.target_mutex == "HTTAS") {
+    for (auto &req : reqs) {
+      gctx.httas.lock(numa_id);
+      gctx.map.insert_or_assign(req.key, req.value);
+      // gctx.val += req.key + req.value;
+      gctx.httas.unlock(numa_id);
     }
   } else if (gctx.target_mutex == "ABT_mutex") {
     for (auto &req : reqs) {
       ABT_mutex_lock(gctx.abt_mu);
-      gctx.map[req.key] = req.value;
+      gctx.map.insert_or_assign(req.key, req.value);
       // gctx.value += kv.first + kv.second;
       ABT_mutex_unlock(gctx.abt_mu);
     }
@@ -129,7 +129,7 @@ auto bench(void *) -> void {
     for (auto &req : reqs) {
       // gctx.sys_mu.lock();
       pthread_mutex_lock(&gctx.sys_mu);
-      gctx.map[req.key] = req.value;
+      gctx.map.insert_or_assign(req.key, req.value);
       // gctx.value += kv.first + kv.second;
       pthread_mutex_unlock(&gctx.sys_mu);
     }
@@ -138,7 +138,7 @@ auto bench(void *) -> void {
     for (auto &req : reqs) {
       if (req.write) {
         gctx.rwlock.wrlock();
-        gctx.map[req.key] = req.value + rc;
+        gctx.map.insert_or_assign(req.key, req.value + rc);
         // gctx.value += kv.first + kv.second;
         gctx.rwlock.wrunlock();
       } else {
@@ -155,7 +155,7 @@ auto bench(void *) -> void {
     for (auto &req : reqs) {
       if (req.write) {
         pthread_rwlock_wrlock(&gctx.sys_rwlock);
-        gctx.map[req.key] = req.value + rc; // use rc
+        gctx.map.insert_or_assign(req.key, req.value + rc); // use rc
         // gctx.value += kv.first + kv.second;
         pthread_rwlock_unlock(&gctx.sys_rwlock);
       } else {
@@ -172,7 +172,7 @@ auto bench(void *) -> void {
     for (auto &req : reqs) {
       if (req.write) {
         ABT_rwlock_wrlock(gctx.abt_rwlock);
-        gctx.map[req.key] = req.value + rc; // use rc
+        gctx.map.insert_or_assign(req.key, req.value + rc); // use rc
         // gctx.value += kv.first + kv.second;
         ABT_rwlock_unlock(gctx.abt_rwlock);
       } else {
@@ -255,8 +255,10 @@ auto main(int argc, char **argv) -> int {
   end_us = get_us();
 
   sec = (end_us - start_us) / 1000000.0;
-  std::cout << gctx.target_mutex << " performance: " << total_op / sec / 1000000
-            << "Mops" << std::endl;
+  // name,Mops,op_num,read_p,thread_num,is_numa
+  std::cout << gctx.target_mutex << "," << total_op / sec / 1000000 << ","
+            << gctx.op_num << "," << gctx.read_p << "," << gctx.thread_num
+            << "," << (gctx.start_cores.size() >= 2) << std::endl;
 
   /* Join and free ULTs. */
   for (uint i = 0; i < num_xstreams * ULT_PER_STREAM; i++) {

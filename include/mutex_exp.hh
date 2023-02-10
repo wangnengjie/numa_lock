@@ -14,7 +14,6 @@ class CACHE_LINE_ALIGN Mutex : private noncopyable, private nonmoveable {
 private:
   enum State : uint8_t {
     SPIN,
-    SUSPEND,
     LOCK,
     G_LOCK,
   };
@@ -28,7 +27,6 @@ public:
     std::atomic_bool has_next_{false};
     uint32_t numa_id_{std::numeric_limits<uint32_t>::max()};
     QNode *prev_{nullptr};
-    ABT_thread ult_handle_{ABT_THREAD_NULL};
 
   public:
     explicit QNode(State state = SPIN) : state_(state) {}
@@ -43,7 +41,6 @@ public:
     std::atomic_uint8_t local_batch_count_{0};
     std::atomic<NNode *> nnext_{nullptr};
     std::atomic<State> state_{SPIN};
-    ABT_thread ult_handle_{ABT_THREAD_NULL};
 
   public:
     explicit NNode(uint32_t numa_id) : numa_id_(numa_id) {}

@@ -34,35 +34,104 @@ public:
 };
 
 // hierarchical ticket lock based spinlock
-class HTicketLock : private noncopyable, private nonmoveable {
+class HTTAS : private noncopyable, private nonmoveable {
+  friend class RWLock;
+
 private:
   struct Node {
-    std::atomic_uint64_t next_ticket_{0};
-    std::atomic_uint64_t next_serving_{0};
-    uint64_t g_ticket_{std::numeric_limits<uint64_t>::max()};
-    std::atomic_uint64_t batch_{0};
-    uint32_t numa_id_;
-    Node(uint32_t numa_id) : numa_id_(numa_id) {}
+    std::atomic_uint64_t flag_{0};
+    std::atomic_uint64_t CACHE_LINE_ALIGN reader_count_{0};
+    std::atomic_uint64_t waiter_count_{0};
+    uint32_t batch_count_{0};
+    auto reader_count() -> uint64_t {
+      return reader_count_.load(std::memory_order_acquire);
+    }
+    auto incr_reader() -> uint64_t {
+      return reader_count_.fetch_add(1, std::memory_order_release);
+    }
+    auto decr_reader() -> uint64_t {
+      return reader_count_.fetch_sub(1, std::memory_order_release);
+    }
   } CACHE_LINE_ALIGN;
 
 private:
   static const size_t MAX_NUMA_NUM =
       CACHE_LINE_SIZE / sizeof(std::atomic<Node *>);
-  static const uint64_t L_BIT = 0b001;
-  static const uint64_t G_BIT = 0b010;
 
 private:
-  std::atomic_uint64_t g_next_ticket_{0};
-  std::atomic_uint64_t g_next_serving_{0};
-  std::atomic<Node *> locked_numa_{nullptr};
+  std::atomic_uint64_t flag_{0};
   std::array<std::atomic<Node *>, MAX_NUMA_NUM> CACHE_LINE_ALIGN numa_arr_;
 
 public:
-  HTicketLock();
-  ~HTicketLock();
-  auto lock(uint32_t numa_id = self_numa_id()) -> void;
-  auto unlock() -> void;
-  auto get_or_alloc_nnode(uint32_t numa_id) -> Node *;
+  HTTAS() {
+    for (auto &i : numa_arr_) {
+      i.store(nullptr, std::memory_order_relaxed);
+    }
+  }
+  ~HTTAS() {
+    for (auto &i : numa_arr_) {
+      auto nnode = i.load(std::memory_order_relaxed);
+      if (nnode != nullptr) {
+        delete nnode;
+      }
+    }
+  }
+
+  auto lock(uint32_t numa_id = self_numa_id()) -> void {
+    auto nnode = get_or_alloc_nnode(numa_id);
+    nnode->waiter_count_.fetch_add(1, std::memory_order_relaxed);
+    uint8_t s = 0;
+    while (1 == (s = nnode->flag_.exchange(1, std::memory_order_acquire))) {
+      while (nnode->flag_.load(std::memory_order_relaxed) == 1) {
+        abt_yield();
+      }
+    }
+    nnode->waiter_count_.fetch_sub(1, std::memory_order_relaxed);
+    if (s == 0) {
+      while (flag_.exchange(1, std::memory_order_acquire)) {
+        while (flag_.load(std::memory_order_relaxed)) {
+          // cpu_pause();
+          abt_yield();
+        }
+      }
+    }
+  }
+
+  auto unlock(uint32_t numa_id = self_numa_id()) -> void {
+    auto nnode = get_or_alloc_nnode(numa_id);
+    auto c = nnode->batch_count_++;
+    if (c < NUMA_BATCH_COUNT &&
+        nnode->waiter_count_.load(std::memory_order_relaxed)) {
+      nnode->flag_.store(2, std::memory_order_release);
+      return;
+    }
+    nnode->batch_count_ = 0;
+    flag_.store(0, std::memory_order_release);
+    nnode->flag_.store(0, std::memory_order_release);
+  }
+
+  auto is_locked() -> bool { return flag_.load(std::memory_order_relaxed); }
+
+private:
+  auto get_or_alloc_nnode(uint32_t numa_id) -> Node * {
+    if ((size_t)numa_id >= MAX_NUMA_NUM) {
+      throw std::runtime_error("numa id too large");
+    }
+    auto &a_ref = numa_arr_[numa_id];
+    auto ptr = a_ref.load(std::memory_order_relaxed);
+    if (likely(ptr != nullptr)) {
+      return ptr;
+    }
+    // first time
+    auto new_node = new Node();
+    if (a_ref.compare_exchange_strong(ptr, new_node,
+                                      std::memory_order_acq_rel)) {
+      return new_node;
+    } else {
+      delete new_node;
+      return ptr;
+    }
+  }
 };
 
 // classic TTAS lock

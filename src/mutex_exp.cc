@@ -41,26 +41,21 @@ auto Mutex::lock(QNode *my, uint32_t numa_id) -> void {
 }
 
 auto Mutex::lock_local(NNode *nnode, QNode *my) -> State {
-  my->ult_handle_ = ABT_THREAD_NULL;
   my->numa_id_ = nnode->numa_id_;
   my->has_next_.store(false, std::memory_order_relaxed);
   my->state_.store(SPIN, std::memory_order_relaxed);
 
   my->prev_ = nnode->qtail_.exchange(my, std::memory_order_acq_rel);
-  abt_get_thread(&my->prev_->ult_handle_);
+  my->prev_->has_next_.store(true, std::memory_order_release);
   State s;
   while (SPIN == (s = my->prev_->state_.load(std::memory_order_acquire))) {
-    if (my->prev_->state_.compare_exchange_weak(
-            s, SUSPEND, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-      abt_suspend();
-    }
+    abt_yield();
   }
   assert(s == LOCK || s == G_LOCK);
   return s;
 }
 
 auto Mutex::lock_global(NNode *nnode) -> void {
-  abt_get_thread(&nnode->ult_handle_);
   nnode->nnext_.store(nullptr, std::memory_order_relaxed);
   nnode->state_.store(SPIN, std::memory_order_relaxed);
 
@@ -70,16 +65,9 @@ auto Mutex::lock_global(NNode *nnode) -> void {
     return;
   }
   prev->nnext_.store(nnode, std::memory_order_release);
-  SpinWait sw;
   State s;
   while (SPIN == (s = nnode->state_.load(std::memory_order_acquire))) {
-    sw.spin(abt_yield, [&nnode, &s]() {
-      if (nnode->state_.compare_exchange_weak(s, SUSPEND,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_relaxed)) {
-        abt_suspend();
-      }
-    });
+    abt_yield();
   }
   assert(s == LOCK);
 }
@@ -89,7 +77,8 @@ auto Mutex::unlock(QNode **my) -> void {
   auto nnode = numa_arr_[(*my)->numa_id_].load(std::memory_order_relaxed);
   auto c = nnode->local_batch_count_.fetch_add(1, std::memory_order_relaxed);
   // weak check has next
-  if (c < NUMA_BATCH_COUNT && (*my)->ult_handle_ != ABT_THREAD_NULL) {
+  if (c < NUMA_BATCH_COUNT &&
+      (*my)->has_next_.load(std::memory_order_acquire)) {
     unlock_local(my, G_LOCK);
     return;
   }
@@ -103,11 +92,7 @@ auto Mutex::unlock(QNode **my) -> void {
 auto Mutex::unlock_local(QNode **my, State state) -> void {
   auto prev = (*my)->prev_;
   State s = (*my)->state_.exchange(state, std::memory_order_acq_rel);
-  if (s == SUSPEND) {
-    abt_resume((*my)->ult_handle_);
-  } else {
-    assert(s == SPIN);
-  }
+  assert(s == SPIN);
   *my = prev;
 }
 
@@ -125,11 +110,7 @@ auto Mutex::unlock_global(NNode *nnode) -> void {
     }
   }
   State s = next->state_.exchange(LOCK, std::memory_order_acq_rel);
-  if (s == SUSPEND) {
-    abt_resume(next->ult_handle_);
-  } else {
-    assert(s == SPIN);
-  }
+  assert(s == SPIN);
 }
 
 } // namespace experimental

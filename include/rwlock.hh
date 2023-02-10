@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common.hh"
-#include "mutex.hh"
+#include "spinlock.hh"
 #include "spinwait.hh"
 #include <atomic>
 #include <cassert>
@@ -9,7 +9,7 @@
 
 class RWLock : private noncopyable, private nonmoveable {
 private:
-  Mutex lock_;
+  HTTAS lock_;
 
 public:
   auto rdlock(uint32_t numa_id = self_numa_id()) -> void;
@@ -22,13 +22,13 @@ inline auto RWLock::rdlock(uint32_t numa_id) -> void {
   auto nnode = lock_.get_or_alloc_nnode(numa_id);
   SpinWait sw;
   while (true) {
-    while (lock_.ntail_.load(std::memory_order_acquire) != nullptr) {
-      sw.spin(abt_yield, abt_yield);
+    while (lock_.is_locked()) {
+      sw.spin_no_block(abt_yield);
     }
-    nnode->reader_count_.fetch_add(1, std::memory_order_release);
+    nnode->incr_reader();
     // need recheck
-    if (lock_.ntail_.load(std::memory_order_acquire) != nullptr) {
-      nnode->reader_count_.fetch_sub(1, std::memory_order_release);
+    if (lock_.is_locked()) {
+      nnode->decr_reader();
       sw.reset();
       continue;
     }
@@ -38,7 +38,7 @@ inline auto RWLock::rdlock(uint32_t numa_id) -> void {
 
 inline auto RWLock::rdunlock(uint32_t numa_id) -> void {
   auto nnode = lock_.get_or_alloc_nnode(numa_id);
-  auto prev = nnode->reader_count_.fetch_sub(1, std::memory_order_release);
+  auto prev = nnode->decr_reader();
   assert(prev != 0);
 }
 
@@ -50,8 +50,8 @@ inline auto RWLock::wrlock(uint32_t numa_id) -> void {
     sw.reset();
     auto nnode = p.load(std::memory_order_relaxed);
     if (nnode != nullptr) {
-      while (nnode->reader_count_.load(std::memory_order_acquire) != 0) {
-        sw.spin(abt_yield, abt_yield);
+      while (nnode->reader_count() != 0) {
+        sw.spin_no_block(abt_yield);
       }
     }
   }
