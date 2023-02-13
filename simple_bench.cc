@@ -1,3 +1,4 @@
+#include "common.hh"
 #include "mutex.hh"
 #include "mutex_exp.hh"
 #include "rwlock.hh"
@@ -36,7 +37,7 @@ struct Context {
   RWLock rwlock;
   ABT_rwlock abt_rwlock;
   pthread_rwlock_t sys_rwlock = PTHREAD_RWLOCK_INITIALIZER;
-  std::unordered_map<uint32_t, uint32_t> map;
+  std::unordered_map<uint32_t, uint32_t> CACHE_LINE_ALIGN map;
   uint64_t val;
   std::string target_mutex;
 };
@@ -72,7 +73,7 @@ auto gen_kv(uint64_t op_num) -> std::vector<Request> {
 
 auto bench(void *) -> void {
   uint cpu_id, numa_id;
-  getcpu(&cpu_id, &numa_id);
+  get_cpu_numa(&cpu_id, &numa_id);
   // if (ret == 0) {
   //   gctx.sys_mu.lock();
   //   std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id <<
@@ -137,17 +138,17 @@ auto bench(void *) -> void {
     int rc = 0; // prevent compiler optimize read request
     for (auto &req : reqs) {
       if (req.write) {
-        gctx.rwlock.wrlock();
+        gctx.rwlock.wrlock(numa_id);
         gctx.map.insert_or_assign(req.key, req.value + rc);
         // gctx.value += kv.first + kv.second;
-        gctx.rwlock.wrunlock();
+        gctx.rwlock.wrunlock(numa_id);
       } else {
-        gctx.rwlock.rdlock();
+        gctx.rwlock.rdlock(numa_id);
         if (gctx.map.count(req.key)) {
           rc++; // prevent compiler optimize
         }
         // gctx.value += kv.first + kv.second;
-        gctx.rwlock.rdunlock();
+        gctx.rwlock.rdunlock(numa_id);
       }
     }
   } else if (gctx.target_mutex == "pthread_rwlock") {

@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
+#include <syscall.h>
+#include <unistd.h>
 
 static inline auto barrier() -> void { asm volatile("" : : : "memory"); }
 
@@ -60,12 +62,23 @@ static inline auto abt_resume(ABT_thread thread) -> void {
   }
 }
 
-static inline auto self_numa_id() -> uint32_t {
-  uint32_t cpu_id, numa_id;
-  int ret = getcpu(&cpu_id, &numa_id);
+static inline auto get_cpu_numa(uint32_t *cpu_id, uint32_t *numa_id) -> void {
+  int ret = syscall(__NR_getcpu, cpu_id, numa_id);
+  // int ret = getcpu(&cpu_id, &numa_id);
   if (unlikely(ret != 0)) {
     throw std::runtime_error("failed to get numa id");
   }
+}
+
+static inline auto self_cpu_id() -> uint32_t {
+  uint32_t cpu_id;
+  get_cpu_numa(&cpu_id, nullptr);
+  return cpu_id;
+}
+
+static inline auto self_numa_id() -> uint32_t {
+  uint32_t numa_id;
+  get_cpu_numa(nullptr, &numa_id);
   return numa_id;
 }
 

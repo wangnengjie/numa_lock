@@ -1,3 +1,4 @@
+#include "common.hh"
 #include "cond.hh"
 #include "mutex.hh"
 #include <abt.h>
@@ -52,12 +53,12 @@ auto gen_kv() -> std::vector<std::pair<uint32_t, uint32_t>> {
 auto bench(void *_arg) -> void {
   auto arg = (global_thread_arg *)_arg;
   uint cpu_id, numa_id;
-  int ret = getcpu(&cpu_id, &numa_id);
-  if (ret == 0) {
-    arg->mu.lock(numa_id);
-    std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id << std::endl;
-    arg->mu.unlock();
-  }
+  get_cpu_numa(&cpu_id, &numa_id);
+
+  arg->mu.lock(numa_id);
+  std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id << std::endl;
+  arg->mu.unlock();
+
   auto kvs = gen_kv();
   ABT_barrier_wait(arg->b1);
   ABT_barrier_wait(arg->b2);
@@ -77,12 +78,12 @@ auto bench(void *_arg) -> void {
 auto check_mutex(void *_arg) -> void {
   auto arg = (global_thread_arg *)_arg;
   uint cpu_id, numa_id;
-  int ret = getcpu(&cpu_id, &numa_id);
-  if (ret == 0) {
-    arg->mu.lock(numa_id);
-    std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id << std::endl;
-    arg->mu.unlock();
-  }
+  get_cpu_numa(&cpu_id, &numa_id);
+
+  arg->mu.lock(numa_id);
+  std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id << std::endl;
+  arg->mu.unlock();
+
   ABT_barrier_wait(arg->b1);
   ABT_barrier_wait(arg->b2);
   for (int64_t i = 0; (uint64_t)i < OP_NUM; i++) {

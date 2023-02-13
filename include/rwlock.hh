@@ -15,7 +15,7 @@ public:
   auto rdlock(uint32_t numa_id = self_numa_id()) -> void;
   auto rdunlock(uint32_t numa_id = self_numa_id()) -> void;
   auto wrlock(uint32_t numa_id = self_numa_id()) -> void;
-  auto wrunlock() -> void;
+  auto wrunlock(uint32_t numa_id = self_numa_id()) -> void;
 };
 
 inline auto RWLock::rdlock(uint32_t numa_id) -> void {
@@ -57,4 +57,6 @@ inline auto RWLock::wrlock(uint32_t numa_id) -> void {
   }
 }
 
-inline auto RWLock::wrunlock() -> void { lock_.unlock(); }
+inline auto RWLock::wrunlock(uint32_t numa_id) -> void {
+  lock_.unlock(numa_id);
+}
