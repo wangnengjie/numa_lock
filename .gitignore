@@ -4,4 +4,3 @@ tmp
 .vscode
 *.log
 run.sh
-test.sh
