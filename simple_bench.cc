@@ -71,9 +71,15 @@ auto gen_kv(uint64_t op_num) -> std::vector<Request> {
   return reqs;
 }
 
-auto bench(void *) -> void {
+auto bench(void *_xstream_id) -> void {
+  uint xstream_id = (uint)(uintptr_t)_xstream_id;
   uint cpu_id, numa_id;
   get_cpu_numa(&cpu_id, &numa_id);
+  uint expect_cpu_id = gctx.start_cores[xstream_id / gctx.thread_num] +
+                       xstream_id % gctx.thread_num;
+  if (cpu_id != expect_cpu_id) {
+    throw std::runtime_error("cpu id unmatch, bind core error");
+  }
   // if (ret == 0) {
   //   gctx.sys_mu.lock();
   //   std::cout << "cpu_id: " << cpu_id << " numa_id: " << numa_id <<
@@ -239,8 +245,8 @@ auto main(int argc, char **argv) -> int {
   /* Create ULTs. */
   for (int i = 0; i < num_xstreams; i++) {
     for (uint j = 0; j < ULT_PER_STREAM; j++) {
-      ABT_thread_create(pools[i], bench, nullptr, ABT_THREAD_ATTR_NULL,
-                        &threads[i * ULT_PER_STREAM + j]);
+      ABT_thread_create(pools[i], bench, (void *)(uintptr_t)i,
+                        ABT_THREAD_ATTR_NULL, &threads[i * ULT_PER_STREAM + j]);
     }
   }
 
@@ -259,7 +265,7 @@ auto main(int argc, char **argv) -> int {
   // name,Mops,op_num,read_p,thread_num,is_numa
   std::cout << gctx.target_mutex << "," << total_op / sec / 1000000 << ","
             << gctx.op_num << "," << gctx.read_p << "," << gctx.thread_num
-            << "," << (gctx.start_cores.size() >= 2) << std::endl;
+            << "," << gctx.start_cores.size() << std::endl;
 
   /* Join and free ULTs. */
   for (uint i = 0; i < num_xstreams * ULT_PER_STREAM; i++) {

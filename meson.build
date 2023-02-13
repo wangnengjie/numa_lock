@@ -10,6 +10,7 @@ project('numa_lock', 'cpp',
 cc = meson.get_compiler('cpp')
 abt_dep = dependency('argobots')
 numa_dep = cc.find_library('numa')
+pthread_dep = cc.find_library('pthread')
 
 incs = include_directories('include')
 
@@ -19,7 +20,7 @@ numa_lock = executable(
   'numa_lock',
   sources: ['numa_lock.cc', srcs],
   include_directories: incs,
-  dependencies: [abt_dep, numa_dep],
+  dependencies: [abt_dep, numa_dep, pthread_dep],
   cpp_args: '-faligned-new',
 )
 
@@ -27,6 +28,6 @@ simple_bench = executable(
   'simple_bench',
   sources: ['simple_bench.cc', srcs],
   include_directories: incs,
-  dependencies: [abt_dep, numa_dep],
+  dependencies: [abt_dep, numa_dep, pthread_dep],
   cpp_args: '-faligned-new',
 )
