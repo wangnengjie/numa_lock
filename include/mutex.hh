@@ -12,8 +12,8 @@ const size_t NUMA_BATCH_COUNT = 128;
 
 enum class NodeState : uint64_t {
   SPIN,
-  // // ULT suspend, need resume
-  // SUSPEND,
+  // ULT suspend, need resume
+  SUSPEND,
   // for LocalNode, gain local lock without global
   //
   // for NumaNode, gain global lock
@@ -31,7 +31,7 @@ private:
     // this is only used for dummy in nnode
     std::atomic<LocalNode *> tail_{nullptr};
     std::atomic<NodeState> state_{NodeState::SPIN};
-    // ABT_thread ult_handle_{ABT_THREAD_NULL};
+    ABT_thread ult_handle_{ABT_THREAD_NULL};
   };
   struct CACHE_LINE_ALIGN NumaNode {
     LocalNode l_list_;
@@ -39,7 +39,7 @@ private:
     std::atomic_uint64_t reader_count_{0}; // for RWLock
     std::atomic<NumaNode *> CACHE_LINE_ALIGN next_{nullptr};
     std::atomic<NodeState> state_{NodeState::SPIN};
-    // ABT_thread ult_handle_{ABT_THREAD_NULL};
+    ABT_thread ult_handle_{ABT_THREAD_NULL};
   };
 
 private:
@@ -56,7 +56,7 @@ public:
   Mutex();
   ~Mutex();
   auto lock(uint32_t numa_id = self_numa_id()) -> void;
-  auto unlock() -> void;
+  auto unlock(uint32_t numa_id = self_numa_id()) -> void;
 
 private:
   auto get_or_alloc_nnode(uint32_t numa_id) -> NumaNode *;

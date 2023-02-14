@@ -53,17 +53,25 @@ auto Mutex::lock(uint32_t numa_id) -> void {
 
 auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
   LocalNode lnode CACHE_LINE_ALIGN; // cache line align
-
+  NodeState s;
   LocalNode *dummy = &nnode->l_list_;
   LocalNode *pre_tail =
       dummy->tail_.exchange(&lnode, std::memory_order_acq_rel);
 
   if (pre_tail == nullptr) {
     lnode.state_.store(NodeState::LOCKED, std::memory_order_relaxed);
+    s = NodeState::LOCKED;
   } else if (pre_tail != nullptr) {
     pre_tail->next_.store(&lnode, std::memory_order_release);
-    while (lnode.state_.load(std::memory_order_acquire) == NodeState::SPIN) {
-      abt_yield();
+    while (NodeState::SPIN ==
+           (s = lnode.state_.load(std::memory_order_acquire))) {
+      // abt_yield();
+      abt_get_thread(&lnode.ult_handle_);
+      if (lnode.state_.compare_exchange_weak(s, NodeState::SUSPEND,
+                                             std::memory_order_acq_rel,
+                                             std::memory_order_relaxed)) {
+        abt_suspend();
+      }
     }
   }
   // we get local lock
@@ -86,8 +94,7 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
   } else {
     dummy->next_.store(next_lnode, std::memory_order_release);
   }
-  // relax is okay here
-  return lnode.state_.load(std::memory_order_relaxed);
+  return s;
 }
 
 auto Mutex::lock_global(NumaNode *nnode) -> void {
@@ -99,20 +106,25 @@ auto Mutex::lock_global(NumaNode *nnode) -> void {
   auto pre_tail = ntail_.exchange(nnode, std::memory_order_acq_rel);
   if (pre_tail == nullptr) {
     nnode->state_.store(NodeState::LOCKED, std::memory_order_relaxed);
-    locked_numa_.store(nnode, std::memory_order_release);
     return;
   }
   pre_tail->next_.store(nnode, std::memory_order_release);
-  while (nnode->state_.load(std::memory_order_relaxed) == NodeState::SPIN) {
-    abt_yield();
+  NodeState s;
+  while (NodeState::SPIN ==
+         (s = nnode->state_.load(std::memory_order_relaxed))) {
+    abt_get_thread(&nnode->ult_handle_);
+    if (nnode->state_.compare_exchange_weak(s, NodeState::SUSPEND,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_relaxed)) {
+      abt_suspend();
+    }
   }
   // get global lock
-  locked_numa_.store(nnode, std::memory_order_release);
   return;
 }
 
-auto Mutex::unlock() -> void {
-  auto nnode = locked_numa_.load(std::memory_order_acquire);
+auto Mutex::unlock(uint32_t numa_id) -> void {
+  auto nnode = get_or_alloc_nnode(numa_id);
   // caller should protect the mutex is locked
   auto c = nnode->local_batch_count_.fetch_add(1, std::memory_order_relaxed);
   if (c < NUMA_BATCH_COUNT) {
@@ -134,7 +146,9 @@ auto Mutex::pass_local_lock(NumaNode *nnode, NodeState state) -> bool {
   }
   NodeState pre_state =
       lnode->state_.exchange(state, std::memory_order_acq_rel);
-  assert(pre_state == NodeState::SPIN);
+  if (pre_state == NodeState::SUSPEND) {
+    abt_resume(lnode->ult_handle_);
+  }
   return true;
 }
 
@@ -153,7 +167,9 @@ auto Mutex::unlock_global(NumaNode *nnode) -> void {
   }
   NodeState pre_state =
       next->state_.exchange(NodeState::LOCKED, std::memory_order_acq_rel);
-  assert(pre_state == NodeState::SPIN);
+  if (pre_state == NodeState::SUSPEND) {
+    abt_resume(next->ult_handle_);
+  }
 }
 
 auto Mutex::unlock_local(NumaNode *nnode) -> void {
