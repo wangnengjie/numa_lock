@@ -93,7 +93,7 @@ auto bench(void *_xstream_id) -> void {
       gctx.mu.lock(numa_id);
       gctx.map.insert_or_assign(req.key, req.value);
       // gctx.value += kv.first + kv.second;
-      gctx.mu.unlock();
+      gctx.mu.unlock(numa_id);
     }
   } else if (gctx.target_mutex == "Mutex_EXP") {
     auto my = new experimental::Mutex::QNode();
