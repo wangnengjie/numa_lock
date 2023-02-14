@@ -56,7 +56,7 @@ public:
   Mutex();
   ~Mutex();
   auto lock(uint32_t numa_id = self_numa_id()) -> void;
-  auto unlock() -> void;
+  auto unlock(uint32_t numa_id = self_numa_id()) -> void;
 
 private:
   auto get_or_alloc_nnode(uint32_t numa_id) -> NumaNode *;

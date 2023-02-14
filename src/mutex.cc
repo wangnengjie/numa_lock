@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 
 Mutex::Mutex() {
@@ -63,7 +64,8 @@ auto Mutex::lock_local(NumaNode *nnode) -> NodeState {
   } else if (pre_tail != nullptr) {
     pre_tail->next_.store(&lnode, std::memory_order_release);
     while (lnode.state_.load(std::memory_order_acquire) == NodeState::SPIN) {
-      abt_yield();
+      // abt_yield();
+      cpu_pause();
     }
   }
   // we get local lock
@@ -99,20 +101,21 @@ auto Mutex::lock_global(NumaNode *nnode) -> void {
   auto pre_tail = ntail_.exchange(nnode, std::memory_order_acq_rel);
   if (pre_tail == nullptr) {
     nnode->state_.store(NodeState::LOCKED, std::memory_order_relaxed);
-    locked_numa_.store(nnode, std::memory_order_release);
+    // locked_numa_.store(nnode, std::memory_order_release);
     return;
   }
   pre_tail->next_.store(nnode, std::memory_order_release);
-  while (nnode->state_.load(std::memory_order_relaxed) == NodeState::SPIN) {
-    abt_yield();
+  while (nnode->state_.load(std::memory_order_acquire) == NodeState::SPIN) {
+    // abt_yield();
+    cpu_pause();
   }
   // get global lock
-  locked_numa_.store(nnode, std::memory_order_release);
+  // locked_numa_.store(nnode, std::memory_order_release);
   return;
 }
 
-auto Mutex::unlock() -> void {
-  auto nnode = locked_numa_.load(std::memory_order_acquire);
+auto Mutex::unlock(uint32_t numa_id) -> void {
+  auto nnode = get_or_alloc_nnode(numa_id);
   // caller should protect the mutex is locked
   auto c = nnode->local_batch_count_.fetch_add(1, std::memory_order_relaxed);
   if (c < NUMA_BATCH_COUNT) {
@@ -132,9 +135,7 @@ auto Mutex::pass_local_lock(NumaNode *nnode, NodeState state) -> bool {
   if (lnode == nullptr) {
     return false;
   }
-  NodeState pre_state =
-      lnode->state_.exchange(state, std::memory_order_acq_rel);
-  assert(pre_state == NodeState::SPIN);
+  lnode->state_.store(state, std::memory_order_release);
   return true;
 }
 
@@ -151,9 +152,7 @@ auto Mutex::unlock_global(NumaNode *nnode) -> void {
       cpu_pause();
     }
   }
-  NodeState pre_state =
-      next->state_.exchange(NodeState::LOCKED, std::memory_order_acq_rel);
-  assert(pre_state == NodeState::SPIN);
+  next->state_.store(NodeState::LOCKED, std::memory_order_release);
 }
 
 auto Mutex::unlock_local(NumaNode *nnode) -> void {
