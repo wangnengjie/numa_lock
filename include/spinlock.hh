@@ -110,7 +110,7 @@ public:
     nnode->flag_.store(0, std::memory_order_release);
   }
 
-  auto is_locked() -> bool { return flag_.load(std::memory_order_relaxed); }
+  auto is_locked() -> bool { return flag_.load(std::memory_order_acquire); }
 
 private:
   auto get_or_alloc_nnode(uint32_t numa_id) -> Node * {
